@@ -64,7 +64,8 @@ def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, s
         logging.error(f"Invalid order type: {order_type}")
         return
     
-    direction_factor = 1 if "buy" in order_type.lower() else -1
+    side = "BUY" if "buy" in order_type.lower() else "SELL"
+    direction_factor = 1 if side == "BUY"  else -1
     # Controls the direction of progressive limit trades
     limit_direction_factor = -1 if "limit" in order_type.lower() else 1
 
@@ -77,11 +78,11 @@ def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, s
         tp_price = order_price + (take_profit_pips * pip_value * direction_factor) if take_profit_pips else 0.0
 
         # Validate price, sl and tp by order type
-        if "buy" in order_type.lower() and not (sl_price < tp_price):
+        if side == "BUY" and not (sl_price < tp_price):
             logging.error((f"Configuration error: sl - {sl_price} "
                           f"greater than tp - {tp_price} for a buy"))
             return
-        if "sell" in order_type.lower() and not (sl_price > tp_price):
+        if side == "SELL" and not (sl_price > tp_price):
             logging.error((f"Configuration error: sl - {sl_price} "
                           f"less than tp - {tp_price} for a sell"))
             return
@@ -112,6 +113,7 @@ def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, s
             logging.error(f"Order {i+1} failed, retcode={result.retcode}, error={mt5.last_error()}")
         else:
             logging.info(f"Order {i+1} placed successfully for {symbol} at {order_price}")
+            save_new_position(result.order, symbol, side, volume_per_order, order_price)
 
         orders.append(result.order)
     
@@ -310,24 +312,41 @@ def write_db(query, args, message="Successful db write"):
             cursor.close()
             conn.close()
 
-def save_new_position(ticket_id, symbol, volume, price):
-        query = """
-        INSERT INTO active_positions (ticket_id, symbol, volume, entry_price, status) 
-        VALUES (%s, %s, %s, %s, 'OPEN')
+def save_new_position(ticket_id, symbol, side, volume, price, status="PENDING", strategy_id=1):
+        args = (ticket_id, symbol, side, volume, price, status, strategy_id)
+        query = f"""
+        INSERT INTO positions (
+            ticket_id,
+            symbol,
+            side,
+            volume,
+            entry_price,
+            status,
+            strategy_id
+            )
+
+        VALUES (?, ?, ?, ?, ?, ?, ?);
         """
-        args = (ticket_id, symbol, volume, price)
-        message = f"Position {ticket_id} saved to DB."
+        message = f"symbol: Position {ticket_id} [{side}] saved to DB."
         
         write_db(query, args, message)
 
-def get_open_positions():
+def read_db(query):
     conn = get_db_connection()
+    conn.row_factory = sqlite3.Row
     if conn:
-        cursor = conn.cursor(dictionary=True) # returns results as dicts
-        query = "SELECT * FROM active_positions WHERE status = 'OPEN'"
+        cursor = conn.cursor()
         cursor.execute(query)
         records = cursor.fetchall()
         cursor.close()
         conn.close()
         return records
     return []
+
+def get_open_positions():
+    query = "SELECT * FROM positions WHERE status = 'OPEN'"
+    return read_db(query)
+
+def get_pending_orders():
+    query = "SELECT * FROM positions WHERE status = 'PENDING'"
+    return read_db(query)

@@ -5,7 +5,7 @@ import MetaTrader5 as mt5
 # import pandas as pd
 from dotenv import load_dotenv
 import logging
-from orders import order, doublebanger
+from orders import order, doublebanger, get_pending_orders, get_open_positions
 load_dotenv()
 
 LOGIN = int(os.environ["ACCOUNT_ID"])
@@ -242,6 +242,16 @@ class TradingBot:
                         continue
                 valid = True
         
+        # Check entry proximity
+        active_trades = get_open_positions() + get_pending_orders()
+        for row in active_trades:
+            if abs(row["entry_price"] - data["entry"]) <= 50:
+                self.logger.info("%s order for %s from %s at %s", row["side"], row["symbol"], row["entry_price"], row["entry_time"])
+                self.logger.info("Order price within 50 pips of existing order. Continue trade? [y/n]")
+                if input("").lower == "y":
+                    break
+                raise ValueError("Aborting order...")
+
         return data
     
     def order_buy(self):
@@ -255,6 +265,7 @@ class TradingBot:
     def order_buylimit(self):
         inputs = self.get_inputs()
         order(
+            symbol=self.symbol,
             order_type="buy limit",
             start_price=inputs["entry"],
             spacing_pips=10.0,
