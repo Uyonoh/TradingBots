@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "backtesting>=0.6.5",
     "metatrader5>=5.0.5509",
     "pandas>=2.3.3",
     "python-dotenv>=1.2.1",
