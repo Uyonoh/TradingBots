@@ -49,10 +49,14 @@ class ActiveDay:
 # 2. Helper Functions
 # -----------------------------
 def order_crossed_tick(order, tick):
-    if order.order_type in ("buy_stop", "sell_limit"):
+    if order.order_type == "buy_stop":
         return tick.ask >= order.price
-    elif order.order_type in ("sell_stop", "buy_limit"):
+    if order.order_type == "buy_limit":
+        return tick.ask <= order.price
+    if order.order_type == "sell_stop":
         return tick.bid <= order.price
+    elif order.order_type == "sell_limit":
+        return tick.bid >= order.price
     return False
 
 def fill_order(order, tick, ladder, active_day, tp_distance, log):
@@ -128,18 +132,18 @@ def run_tick_backtest(ticks, base_price, step_distance, num_steps, tp_distance, 
     # Tick processing loop
     for tick in ticks:
         # 1. SL/TP resolution
-        for pos in active_day.positions:
-            if pos.open:
-                if pos.side == "long":
-                    if tick.bid <= pos.sl:
-                        close_position(pos, pos.sl, tick.time, log)
-                    elif tick.bid >= pos.tp:
-                        close_position(pos, pos.tp, tick.time, log)
-                else:  # short
-                    if tick.ask >= pos.sl:
-                        close_position(pos, pos.sl, tick.time, log)
-                    elif tick.ask <= pos.tp:
-                        close_position(pos, pos.tp, tick.time, log)
+        positions_snapshot = [p for p in active_day.positions if p.open]
+        for pos in positions_snapshot:
+            if pos.side == "long":
+                if tick.bid <= pos.sl:
+                    close_position(pos, pos.sl, tick.time, log)
+                elif tick.bid >= pos.tp:
+                    close_position(pos, pos.tp, tick.time, log)
+            else:  # short
+                if tick.ask >= pos.sl:
+                    close_position(pos, pos.sl, tick.time, log)
+                elif tick.ask <= pos.tp:
+                    close_position(pos, pos.tp, tick.time, log)
 
         # 2. Pending order fills
         # Loop to handle cascading multiple fills on same tick
@@ -157,15 +161,16 @@ def run_tick_backtest(ticks, base_price, step_distance, num_steps, tp_distance, 
             orders_to_check = [o for o in orders_to_check if not o.filled]
 
         # 3. Update equity
-        update_equity(active_day)
+        
 
         # 4. End-of-day check
         if tick.time >= EOD_time:
-            for pos in active_day.positions:
-                if pos.open:
-                    price = tick.bid if pos.side == "long" else tick.ask
-                    close_position(pos, price, tick.time, log)
+            positions_snapshot = [p for p in active_day.positions if p.open]
+            for pos in positions_snapshot:
+                price = tick.bid if pos.side == "long" else tick.ask
+                close_position(pos, price, tick.time, log)
             cancel_all_orders(active_day, log, tick.time)
+            update_equity(active_day)
             break
 
     return active_day, log

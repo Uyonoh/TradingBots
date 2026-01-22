@@ -9,4 +9,5 @@ dependencies = [
     "metatrader5>=5.0.5509",
     "pandas>=2.3.3",
     "python-dotenv>=1.2.1",
+    "pytz>=2025.2",
 ]
