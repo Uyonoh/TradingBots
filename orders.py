@@ -1,0 +1,333 @@
+import os
+import argparse
+import MetaTrader5 as mt5
+import sqlite3
+# import pandas as pd
+from dotenv import load_dotenv
+import logging
+load_dotenv()
+# PnL = price_delta × volume × contract_size
+
+get_db_connection = lambda: sqlite3.connect("trades.db.sqlite3")
+
+LOGIN = int(os.environ["ACCOUNT_ID"])
+PASSWORD = os.environ["PASSWORD"]
+SERVER = os.environ["SERVER"]
+
+symbol_pips = {
+        "XAU": 10,
+        "GER40": 100,
+        "#BTCUSD": 1000,
+        }
+
+
+def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, stop_loss_pips=None, take_profit_pips=None, symbol="GER40"):
+    """
+    Places a grid of Buy Limit orders.
+    
+    Args:
+        symbol (str): Trading symbol (e.g., 'GER40', 'BTCUSD').
+        start_price (float): Price for the first order.
+        spacing_pips (float): Distance between orders in pips.
+        num_orders (int): Total number of buy orders to place.
+        volume_per_order (float): Trade volume for each order.
+        stop_loss_pips (float): Optional SL distance in pips for all orders.
+        take_profit_pips (float): Optional TP distance in pips for all orders.
+    """
+
+    ALLOWED_ORDERS = {
+        "buy stop": mt5.ORDER_TYPE_BUY_STOP,
+        "buy limit": mt5.ORDER_TYPE_BUY_LIMIT,
+        # "buy stop limit": mt5.ORDER_TYPE_BUY_STOP_LIMIT,
+        "sell stop": mt5.ORDER_TYPE_SELL_STOP,
+        "sell limit": mt5.ORDER_TYPE_SELL_LIMIT,        
+        # "sell stop limit": mt5.ORDER_TYPE_SELL_STOP_LIMIT
+    }
+
+    logging.info("Recieved %s Order", order_type.capitalize())
+    # 1. Connect to MT5 (Update login/password/server for your broker)
+    # logging.info("Initializing MT5 client...")
+    # if not mt5.initialize(login=LOGIN, password=PASSWORD, server=SERVER):
+    #     logging.error(f"Initialization failed: {mt5.last_error()}")
+    #     logging.info(f"{LOGIN=} {PASSWORD=} {SERVER=}")
+    #     mt5.shutdown()
+    #     return
+    
+    # 2. Prepare order request template[citation:1][citation:2]
+    logging.info("Preparing request...")
+    
+    point = mt5.symbol_info(symbol).point
+    pip_value = point * symbol_pips[symbol]
+
+    valid_order = ALLOWED_ORDERS.get(order_type.lower(), None)
+    if valid_order is None:
+        logging.error(f"Invalid order type: {order_type}")
+        return
+    
+    direction_factor = 1 if "buy" in order_type.lower() else -1
+    # Controls the direction of progressive limit trades
+    limit_direction_factor = -1 if "limit" in order_type.lower() else 1
+
+    orders = []
+    for i in range(num_orders):
+        order_price = start_price + (i * spacing_pips * pip_value * direction_factor * limit_direction_factor)
+        
+        # Calculate SL/TP prices if provided
+        sl_price = order_price - (stop_loss_pips * pip_value * direction_factor) if stop_loss_pips else 0.0
+        tp_price = order_price + (take_profit_pips * pip_value * direction_factor) if take_profit_pips else 0.0
+
+        # Validate price, sl and tp by order type
+        if "buy" in order_type.lower() and not (sl_price < tp_price):
+            logging.error((f"Configuration error: sl - {sl_price} "
+                          f"greater than tp - {tp_price} for a buy"))
+            return
+        if "sell" in order_type.lower() and not (sl_price > tp_price):
+            logging.error((f"Configuration error: sl - {sl_price} "
+                          f"less than tp - {tp_price} for a sell"))
+            return
+        
+        request = {
+            "action": mt5.TRADE_ACTION_PENDING,       # Place a pending order[citation:1]
+            "symbol": symbol,
+            "volume": volume_per_order,
+            "type": valid_order,
+            "price": round(order_price, 6),          # Price of the pending order
+            "sl": round(sl_price, 6) if sl_price else 0.0,
+            "tp": round(tp_price, 6) if tp_price else 0.0,
+            "deviation": 20,                         # Max price deviation in points
+            "magic": 123456,                         # Unique EA/script identifier
+            "comment": f"Grid {order_type} order {i+1}",
+            "type_time": mt5.ORDER_TIME_GTC,         # Good Till Cancelled
+            "type_filling": mt5.ORDER_FILLING_IOC,   # Execution policy[citation:1]
+        }
+        
+        # 3. Send the order
+        logging.info("\n" + "="*50)
+        logging.info(f"Sending Request: \n{request}")
+        logging.info("="*50)
+        result = mt5.order_send(request)
+        
+        # 4. Check and print result
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            logging.error(f"Order {i+1} failed, retcode={result.retcode}, error={mt5.last_error()}")
+        else:
+            logging.info(f"Order {i+1} placed successfully for {symbol} at {order_price}")
+
+        orders.append(result.order)
+    
+    return orders if len(orders) > 1 else orders[0]
+
+
+
+def place_buy_grid(start_price, spacing_pips, num_orders, volume_per_order, stop_loss_pips=None, take_profit_pips=None, symbol="GER40"):
+    """
+    Places a grid of Buy Limit orders.
+    
+    Args:
+        symbol (str): Trading symbol (e.g., 'GER40', 'BTCUSD').
+        start_price (float): Price for the first order.
+        spacing_pips (float): Distance between orders in pips.
+        num_orders (int): Total number of buy orders to place.
+        volume_per_order (float): Trade volume for each order.
+        stop_loss_pips (float): Optional SL distance in pips for all orders.
+        take_profit_pips (float): Optional TP distance in pips for all orders.
+    """
+
+    logging.info("Recieved Buy Limit Order")
+    # 1. Connect to MT5 (Update login/password/server for your broker)
+    logging.info("Initializing MT5 client...")
+    if not mt5.initialize(login=LOGIN, password=PASSWORD, server=SERVER):
+        logging.error(f"Initialization failed: {mt5.last_error()}")
+        logging.info(f"{LOGIN=} {PASSWORD=} {SERVER=}")
+        mt5.shutdown()
+        return
+    
+    # 2. Prepare order request template[citation:1][citation:2]
+    logging.info("Preparing request...")
+    
+    point = mt5.symbol_info(symbol).point
+    
+    pip_value = point * symbol_pips[symbol]
+    
+    for i in range(num_orders):
+        order_price = start_price - (i * spacing_pips * pip_value)
+        
+        # Calculate SL/TP prices if provided
+        sl_price = order_price - (stop_loss_pips * pip_value) if stop_loss_pips else 0.0
+        tp_price = order_price + (take_profit_pips * pip_value) if take_profit_pips else 0.0
+        
+        request = {
+            "action": mt5.TRADE_ACTION_PENDING,       # Place a pending order[citation:1]
+            "symbol": symbol,
+            "volume": volume_per_order,
+            "type": mt5.ORDER_TYPE_BUY_LIMIT,        # Use BUY_STOP for orders above price[citation:1]
+            "price": round(order_price, 6),          # Price of the pending order
+            "sl": round(sl_price, 6) if sl_price else 0.0,
+            "tp": round(tp_price, 6) if tp_price else 0.0,
+            "deviation": 20,                         # Max price deviation in points
+            "magic": 123456,                         # Unique EA/script identifier
+            "comment": f"Grid buy order {i+1}",
+            "type_time": mt5.ORDER_TIME_GTC,         # Good Till Cancelled
+            "type_filling": mt5.ORDER_FILLING_IOC,   # Execution policy[citation:1]
+        }
+        
+        # 3. Send the order
+        logging.info("\n" + "="*50)
+        logging.info(f"Sending Request: \n{request}")
+        logging.info("="*50)
+        result = mt5.order_send(request)
+        
+        # 4. Check and print result
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            logging.error(f"Order {i+1} failed, retcode={result.retcode}, error={mt5.last_error()}")
+        else:
+            logging.info(f"Order {i+1} placed successfully for {symbol} at {order_price}")
+    
+
+def doublebanger(bot, inputs, confirm=True, autocomplete=False):
+    symbol_ticks = bot.get_symbol_ticks()
+    spread = symbol_ticks.ask - symbol_ticks.bid
+    bot.logger.info("Current spread is %s", spread)
+
+    if inputs["entry"] > symbol_ticks.ask:
+        bot.logger.info("Entry is above market price")
+        if confirm:
+            if input('Type "BUY" to continue: ') != "BUY":
+                bot.logger.error("Aborting operation")
+                return
+        order(
+            symbol=bot.symbol,
+            order_type="buy stop",
+            start_price=inputs["entry"],
+            spacing_pips=inputs["spacing_pips"],
+            num_orders=inputs["num_orders"],
+            volume_per_order=inputs["lot_size"] ,
+            stop_loss_pips=inputs["sl pips"],
+            take_profit_pips=inputs["tp pips"]
+        )
+        # Only need to track this, for following orders
+        pending_order = order(
+            symbol=bot.symbol,
+            order_type="sell limit",
+            start_price=inputs["entry"],
+            spacing_pips=inputs["spacing_pips"],
+            num_orders=1,
+            volume_per_order=inputs["lot_size"] ,
+            stop_loss_pips=inputs["sl pips"],
+            take_profit_pips=inputs["tp pips"]
+        )
+        
+        if not autocomplete:
+            pending = True
+            inputs["entry"] -= 10 * bot.pip_value
+            while pending:
+                if input('Enter "SELL" to place remaining sell stops: ') == "SELL":
+                    symbol_ticks = mt5.symbol_info_tick(bot.symbol)
+                    if symbol_ticks.ask < inputs["entry"]:
+                        bot.logger.error("Market price still below %s", inputs["entry"])
+                        continue
+                    order(
+                        symbol=bot.symbol,
+                        order_type="sell stop",
+                        start_price=inputs["entry"],
+                        spacing_pips=inputs["spacing_pips"],
+                        num_orders=inputs["num_orders"] - 1,
+                        volume_per_order=inputs["lot_size"] ,
+                        stop_loss_pips=inputs["sl pips"],
+                        take_profit_pips=inputs["tp pips"]
+                    )
+                    pending = False
+    elif inputs["entry"] < symbol_ticks.bid:
+        bot.logger.info("Entry is below market price")
+        if confirm:
+            if input('Type "SELL" to continue: ') != "SELL":
+                bot.logger.error("Aborting operation")
+                return
+        order(
+            symbol=bot.symbol,
+            order_type="sell stop",
+            start_price=inputs["entry"],
+            spacing_pips=inputs["spacing_pips"],
+            num_orders=inputs["num_orders"],
+            volume_per_order=inputs["lot_size"] ,
+            stop_loss_pips=inputs["sl pips"],
+            take_profit_pips=inputs["tp pips"]
+        )
+        pending_order = order(
+            symbol=bot.symbol,
+            order_type="buy limit",
+            start_price=inputs["entry"],
+            spacing_pips=inputs["spacing_pips"],
+            num_orders=1,
+            volume_per_order=inputs["lot_size"] ,
+            stop_loss_pips=inputs["sl pips"],
+            take_profit_pips=inputs["tp pips"]
+        )
+        
+        if not autocomplete:
+            pending = True
+            inputs["entry"] += 10 * bot.pip_value
+            while pending:
+                if input('Enter "BUY" to place remaining buy stops: ') == "BUY":
+                    symbol_ticks = mt5.symbol_info_tick(bot.symbol)
+                    if symbol_ticks is None:
+                        print(f"Error for {bot.symbol}: {mt5.last_error()}")
+                        return None
+                    if symbol_ticks.bid > inputs["entry"]:
+                        bot.logger.error("Market price still above %s", inputs["entry"])
+                        continue
+                    order(
+                        symbol=bot.symbol,
+                        order_type="buy stop",
+                        start_price=inputs["entry"],
+                        spacing_pips=inputs["spacing_pips"],
+                        num_orders=inputs["num_orders"] - 1,
+                        volume_per_order=inputs["lot_size"] ,
+                        stop_loss_pips=inputs["sl pips"],
+                        take_profit_pips=inputs["tp pips"]
+                    )
+                    pending = False
+
+    if autocomplete:
+        return pending_order
+    
+history_query = """
+        INSERT INTO deal_history (deal_id, symbol, deal_type, volume, price, profit)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """
+
+def write_db(query, args, message="Successful db write"):
+    conn = get_db_connection()
+    if conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(query, args)
+            conn.commit()
+            logging.info(message)
+        except sqlite3.Error as err:
+            logging.error(f"DB error: {err}")
+        finally:
+            cursor.close()
+            conn.close()
+
+def save_new_position(ticket_id, symbol, volume, price):
+        query = """
+        INSERT INTO active_positions (ticket_id, symbol, volume, entry_price, status) 
+        VALUES (%s, %s, %s, %s, 'OPEN')
+        """
+        args = (ticket_id, symbol, volume, price)
+        message = f"Position {ticket_id} saved to DB."
+        
+        write_db(query, args, message)
+
+def get_open_positions():
+    conn = get_db_connection()
+    if conn:
+        cursor = conn.cursor(dictionary=True) # returns results as dicts
+        query = "SELECT * FROM active_positions WHERE status = 'OPEN'"
+        cursor.execute(query)
+        records = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return records
+    return []
