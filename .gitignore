@@ -16,3 +16,6 @@ wheels/
 makedb.py
 *.db
 *.sqlite3
+
+# Logging
+*.log
