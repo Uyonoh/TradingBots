@@ -19,3 +19,4 @@ makedb.py
 
 # Logging
 *.log
+*.csv

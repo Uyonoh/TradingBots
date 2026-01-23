@@ -304,8 +304,8 @@ class TradingBot:
         }
         # sl_pips = args.slpips
         inputs = {
-                "lot_size":0.01, "sl pips": 50, "tp pips": 50,
-                "spacing_pips": 50, "num_orders": 4
+                "lot_size":0.01, "sl pips": 10, "tp pips": 10,
+                "spacing_pips": 10, "num_orders": 20
                 }
         for pos,v in positions.items():
             inputs["entry"] =  v["entry"]
@@ -319,6 +319,8 @@ class TradingBot:
             time.sleep(2)
 
             active_orders = mt5.orders_get(symbol=self.symbol)
+            if not active_orders:
+                break
             active_tickets = [order.ticket for order in active_orders]
 
             top_still_pending = positions["top"]["pending_order"] in active_tickets

@@ -350,3 +350,38 @@ def get_open_positions():
 def get_pending_orders():
     query = "SELECT * FROM positions WHERE status = 'PENDING'"
     return read_db(query)
+
+def get_deals(ticket_id=676081850):
+    if not mt5.initialize(login=LOGIN, password=PASSWORD, server=SERVER):
+        logging.error(f"Initialization failed: {mt5.last_error()}")
+        logging.info(f"{LOGIN=} {PASSWORD=} {SERVER=}")
+
+    from datetime import datetime, timedelta
+
+    yesterday = datetime.now() - timedelta(days=1)
+    yesterday = datetime(2026, 1, 1)
+    today = datetime.now()
+
+    orders = get_pending_orders()
+    orders = [order for order in orders if order["ticket_id"] == ticket_id ]
+    deals = mt5.history_deals_get(yesterday, today)
+    position_id = [d for d in deals if d.order == ticket_id][0].position_id
+    deals = [d for d in deals if d.position_id == position_id]
+
+
+    mt5.shutdown()
+    return deals
+
+def save_new_deal(symbol, deal):
+    query ="""
+    INSERT INTO deals
+    (ticket_id, symbol, side, volume, price, commission, swap, profit)
+    VALUES
+    (?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    args = (deal.order, symbol, deal.type, deal.volume, deal.price, deal.commission, deal.swap, deal.profit)
+    message = f"symbol: Deal {deal.order} [{deal.type}] saved to DB."
+
+    write_db(query, args, message)
+
+print(get_deals(665015112))

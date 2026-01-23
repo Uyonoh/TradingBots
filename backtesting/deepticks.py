@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, time, timedelta
 import pytz
+import itertools
 from typing import List, Dict, Tuple, Optional
 import warnings
 warnings.filterwarnings('ignore')
@@ -74,10 +75,12 @@ class TickBasedLadderStrategy:
         self.equity = account_balance
         
         # Strategy parameters
-        self.entry_distance = 10.0  # Fixed distance for ladder steps (in USD)
-        self.tp_distance = 5.0      # Take profit distance (in USD)
+        self.entry_distance = 550.0  # Fixed distance for ladder steps (in USD)
+        self.tp_distance = 5      # Take profit distance (in USD)
         self.lot_size = 0.01         # Base lot size (0.01 BTC)
-        self.num_steps = 5           # Number of ladder steps above and below
+        self.num_steps = 10         # Number of ladder steps above and below
+        self.position_breadth = self.tp_distance * 2
+        self.step_size = self.tp_distance
         
         # Daily schedule
         self.trading_start_time = time(0, 0)  # Midnight UTC
@@ -113,30 +116,30 @@ class TickBasedLadderStrategy:
     def initialize_mt5(self):
         """Initialize MT5 connection"""
         if not mt5.initialize():
-            print("MT5 initialization failed")
+            #print("MT5 initialization failed")
             mt5.shutdown()
             return False
         
         # Select symbol
         if not mt5.symbol_select(self.symbol, True):
-            print(f"Symbol {self.symbol} not found")
+            #print(f"Symbol {self.symbol} not found")
             mt5.shutdown()
             return False
         
         # Get symbol info
         self.symbol_info = mt5.symbol_info(self.symbol)
         if self.symbol_info is None:
-            print(f"Cannot get symbol info for {self.symbol}")
+            #print(f"Cannot get symbol info for {self.symbol}")
             mt5.shutdown()
             return False
         
-        print(f"Initialized {self.symbol}: Point={self.symbol_info.point}, Spread={self.symbol_info.spread}")
+        #print(f"Initialized {self.symbol}: Point={self.symbol_info.point}, Spread={self.symbol_info.spread}")
         return True
     
     def get_tick_data_range(self, start_date: datetime, end_date: datetime, 
                            max_ticks: int = 10000000) -> List[Tick]:
         """Retrieve tick data for the specified range"""
-        print(f"Fetching tick data from {start_date} to {end_date}")
+        #print(f"Fetching tick data from {start_date} to {end_date}")
         
         # Convert to timestamp
         from_date = int(start_date.timestamp())
@@ -146,8 +149,10 @@ class TickBasedLadderStrategy:
         ticks = mt5.copy_ticks_range(self.symbol, from_date, to_date, mt5.COPY_TICKS_ALL)
         
         if ticks is None or len(ticks) == 0:
-            print("No tick data retrieved")
-            return []
+            #print("Failed to fetch ticks from range, trying alternate methods...")
+            ticks = mt5.copy_ticks_from(self.symbol, from_date, 1000000, mt5.COPY_TICKS_ALL)
+            if ticks is None or len(ticks) == 0:
+                return []
         
         # Convert to list of Tick objects
         tick_objects = []
@@ -161,15 +166,15 @@ class TickBasedLadderStrategy:
             )
             tick_objects.append(tick_obj)
         
-        print(f"Retrieved {len(tick_objects)} ticks")
+        #print(f"Retrieved {len(tick_objects)} ticks")
         return tick_objects
     
     def setup_daily_ladder(self, open_price: float, current_time: datetime):
         """Setup the ladder orders for the day based on opening price"""
-        print(f"\n{'='*60}")
-        print(f"Setting up daily ladder at {current_time}")
-        print(f"Open Price: ${open_price:.2f}")
-        print(f"{'='*60}")
+        #print(f"\n{'='*60}")
+        #print(f"Setting up daily ladder at {current_time}")
+        #print(f"Open Price: ${open_price:.2f}")
+        #print(f"{'='*60}")
         
         self.daily_open_price = open_price
         self.current_day = current_time.date()
@@ -180,11 +185,11 @@ class TickBasedLadderStrategy:
         
         # Setup BUY ladder above open price
         for i in range(1, self.num_steps + 1):
-            order_price = open_price + (i * self.entry_distance)
+            order_price = open_price + self.entry_distance + ((i-1) * self.step_size)
             
             # Calculate TP and SL
             tp_price = order_price + self.tp_distance
-            sl_price = open_price if i == 1 else (open_price + ((i-1) * self.entry_distance))
+            sl_price = order_price - self.tp_distance
             
             # Create BUY STOP order
             buy_order = LadderOrder(
@@ -216,11 +221,11 @@ class TickBasedLadderStrategy:
         
         # Setup SELL ladder below open price
         for i in range(1, self.num_steps + 1):
-            order_price = open_price - (i * self.entry_distance)
+            order_price = open_price - self.entry_distance - ((i-1) * self.step_size)
             
             # Calculate TP and SL
             tp_price = order_price - self.tp_distance
-            sl_price = open_price if i == 1 else (open_price - ((i-1) * self.entry_distance))
+            sl_price = order_price + self.tp_distance
             
             # Create SELL STOP order
             sell_order = LadderOrder(
@@ -251,7 +256,7 @@ class TickBasedLadderStrategy:
             self.log_order(f"Placed SELL_STOP_{i} at ${order_price:.2f} [TP:${tp_price:.2f}|SL:${sl_price:.2f}]")
         
         self.daily_setup_complete = True
-        print(f"Daily ladder setup complete: {len(self.daily_orders)} orders placed")
+        #print(f"Daily ladder setup complete: {len(self.daily_orders)} orders placed")
     
     def check_order_triggers(self, tick: Tick):
         """Check if any pending orders are triggered by current tick"""
@@ -267,25 +272,25 @@ class TickBasedLadderStrategy:
                 # Buy stop triggers when ask price reaches or exceeds order price
                 if tick.ask >= order.price:
                     is_triggered = True
-                    fill_price = max(tick.ask, order.price)  # Slippage simulation
+                    fill_price =  tick.ask #max(tick.ask, order.price)  # Slippage simulation
             
             elif order.type == "SELL_STOP":
                 # Sell stop triggers when bid price reaches or goes below order price
                 if tick.bid <= order.price:
                     is_triggered = True
-                    fill_price = min(tick.bid, order.price)  # Slippage simulation
+                    fill_price = tick.bid #min(tick.bid, order.price)  # Slippage simulation
             
             elif order.type == "BUY_LIMIT":
                 # Buy limit triggers when ask price reaches or goes below order price
                 if tick.ask <= order.price:
                     is_triggered = True
-                    fill_price = min(tick.ask, order.price)
+                    fill_price = tick.ask #min(tick.ask, order.price)
             
             elif order.type == "SELL_LIMIT":
                 # Sell limit triggers when bid price reaches or exceeds order price
                 if tick.bid >= order.price:
                     is_triggered = True
-                    fill_price = max(tick.bid, order.price)
+                    fill_price = tick.bid #max(tick.bid, order.price)
             
             if is_triggered:
                 order.filled = True
@@ -362,7 +367,7 @@ class TickBasedLadderStrategy:
                 # Check Stop Loss
                 elif tick.bid <= position.sl:
                     exit_reason = "SL"
-                    exit_price = position.sl
+                    exit_price = tick.bid
             
             else:  # SHORT position
                 # Check Take Profit
@@ -373,7 +378,7 @@ class TickBasedLadderStrategy:
                 # Check Stop Loss
                 elif tick.ask >= position.sl:
                     exit_reason = "SL"
-                    exit_price = position.sl
+                    exit_price = tick.ask
             
             if exit_reason:
                 positions_to_close.append((position, exit_reason, exit_price))
@@ -429,9 +434,9 @@ class TickBasedLadderStrategy:
     
     def end_of_day_closeout(self, tick: Tick):
         """Close all positions and cancel all orders at end of day"""
-        print(f"\n{'='*60}")
-        print(f"END OF DAY CLOSEOUT at {tick.time}")
-        print(f"{'='*60}")
+        #print(f"\n{'='*60}")
+        #print(f"END OF DAY CLOSEOUT at {tick.time}")
+        #print(f"{'='*60}")
         
         # Close all open positions at current market price
         positions_to_close = self.open_positions.copy()
@@ -492,13 +497,13 @@ class TickBasedLadderStrategy:
         
         return final_slippage
     
-    def run_tick_backtest(self, tick_data: List[Tick]):
+    def run_tick_backtest(self, tick_data: List[Tick], verbose=False):
         """Run the backtest on tick-by-tick data"""
-        print(f"\n{'='*60}")
-        print(f"STARTING TICK-BASED BACKTEST")
-        print(f"Total ticks: {len(tick_data)}")
-        print(f"Date range: {tick_data[0].time} to {tick_data[-1].time}")
-        print(f"{'='*60}")
+        #print(f"\n{'='*60}")
+        #print(f"STARTING TICK-BASED BACKTEST")
+        #print(f"Total ticks: {len(tick_data)}")
+        #print(f"Date range: {tick_data[0].time} to {tick_data[-1].time}")
+        #print(f"{'='*60}")
         
         self.total_ticks = len(tick_data)
         
@@ -512,7 +517,7 @@ class TickBasedLadderStrategy:
             # Progress reporting
             if i % 100000 == 0 and i > 0:
                 progress = (i / len(tick_data)) * 100
-                print(f"Processed {i:,} ticks ({progress:.1f}%)...")
+                #print(f"Processed {i:,} ticks ({progress:.1f}%)...")
             
             # Check if new day
             if tick.time.date() != current_day:
@@ -538,8 +543,8 @@ class TickBasedLadderStrategy:
         day_start = day_ticks[0].time
         day_end = day_ticks[-1].time
         
-        print(f"\nProcessing day: {day_start.date()}")
-        print(f"Day ticks: {len(day_ticks)}")
+        #print(f"\nProcessing day: {day_start.date()}")
+        #print(f"Day ticks: {len(day_ticks)}")
         
         # Reset daily state
         self.daily_setup_complete = False
@@ -547,7 +552,7 @@ class TickBasedLadderStrategy:
         # Process each tick in the day
         for tick in day_ticks:
             # Check if it's time for daily setup
-            if (not self.daily_setup_completed and 
+            if (not self.daily_setup_complete and 
                 tick.time.time() >= self.trading_start_time):
                 
                 # Use first tick after start time as open price
@@ -586,24 +591,24 @@ class TickBasedLadderStrategy:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[ORDER] {message}"
         self.order_log.append(log_entry)
-        print(log_entry)
+        #print(log_entry)
     
     def log_trade(self, message: str):
         """Log trade-related messages"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[TRADE] {message}"
         self.trade_log.append(log_entry)
-        print(log_entry)
+        #print(log_entry)
     
     def generate_performance_report(self):
         """Generate comprehensive performance report"""
         if not self.closed_positions:
-            print("No trades executed during backtest")
+            #print("No trades executed during backtest")
             return
         
-        print(f"\n{'='*80}")
-        print("TICK-BASED BACKTEST PERFORMANCE REPORT")
-        print(f"{'='*80}")
+        #print(f"\n{'='*80}")
+        #print("TICK-BASED BACKTEST PERFORMANCE REPORT")
+        #print(f"{'='*80}")
         
         # Basic statistics
         initial_balance = self.account_balance
@@ -642,50 +647,50 @@ class TickBasedLadderStrategy:
             if position.pnl > 0:
                 ladder_stats[level]['wins'] += 1
         
-        # Print report
-        print(f"\nACCOUNT SUMMARY:")
-        print(f"{'-'*40}")
-        print(f"Initial Balance: ${initial_balance:,.2f}")
-        print(f"Final Balance: ${final_balance:,.2f}")
-        print(f"Total Return: {total_return:.2f}%")
-        print(f"Total P&L: ${self.total_pnl:,.2f}")
-        print(f"Maximum Drawdown: ${self.max_drawdown:,.2f}")
+        # #print report
+        #print(f"\nACCOUNT SUMMARY:")
+        #print(f"{'-'*40}")
+        #print(f"Initial Balance: ${initial_balance:,.2f}")
+        #print(f"Final Balance: ${final_balance:,.2f}")
+        #print(f"Total Return: {total_return:.2f}%")
+        #print(f"Total P&L: ${self.total_pnl:,.2f}")
+        #print(f"Maximum Drawdown: ${self.max_drawdown:,.2f}")
         
-        print(f"\nTRADE STATISTICS:")
-        print(f"{'-'*40}")
-        print(f"Total Trades: {self.total_trades}")
-        print(f"Winning Trades: {self.winning_trades} ({self.winning_trades/self.total_trades*100:.1f}%)")
-        print(f"Losing Trades: {self.losing_trades} ({self.losing_trades/self.total_trades*100:.1f}%)")
-        print(f"Profit Factor: {profit_factor:.2f}")
-        print(f"Sharpe Ratio: {sharpe:.2f}")
-        print(f"Average Win: ${avg_win:.2f}")
-        print(f"Average Loss: ${avg_loss:.2f}")
-        print(f"Largest Win: ${largest_win:.2f}")
-        print(f"Largest Loss: ${largest_loss:.2f}")
+        #print(f"\nTRADE STATISTICS:")
+        #print(f"{'-'*40}")
+        #print(f"Total Trades: {self.total_trades}")
+        #print(f"Winning Trades: {self.winning_trades} ({self.winning_trades/self.total_trades*100:.1f}%)")
+        #print(f"Losing Trades: {self.losing_trades} ({self.losing_trades/self.total_trades*100:.1f}%)")
+        #print(f"Profit Factor: {profit_factor:.2f}")
+        #print(f"Sharpe Ratio: {sharpe:.2f}")
+        #print(f"Average Win: ${avg_win:.2f}")
+        #print(f"Average Loss: ${avg_loss:.2f}")
+        #print(f"Largest Win: ${largest_win:.2f}")
+        #print(f"Largest Loss: ${largest_loss:.2f}")
         
-        print(f"\nPOSITION ANALYSIS:")
-        print(f"{'-'*40}")
+        #print(f"\nPOSITION ANALYSIS:")
+        #print(f"{'-'*40}")
         if long_positions:
             long_win_rate = len([p for p in long_positions if p.pnl > 0]) / len(long_positions) * 100
             avg_long_hold = np.mean([(p.exit_time - p.entry_time).total_seconds()/60 for p in long_positions])
-            print(f"Long Positions: {len(long_positions)} (Win Rate: {long_win_rate:.1f}%, Avg Hold: {avg_long_hold:.1f} min)")
+            #print(f"Long Positions: {len(long_positions)} (Win Rate: {long_win_rate:.1f}%, Avg Hold: {avg_long_hold:.1f} min)")
         
         if short_positions:
             short_win_rate = len([p for p in short_positions if p.pnl > 0]) / len(short_positions) * 100
             avg_short_hold = np.mean([(p.exit_time - p.entry_time).total_seconds()/60 for p in short_positions])
-            print(f"Short Positions: {len(short_positions)} (Win Rate: {short_win_rate:.1f}%, Avg Hold: {avg_short_hold:.1f} min)")
+            #print(f"Short Positions: {len(short_positions)} (Win Rate: {short_win_rate:.1f}%, Avg Hold: {avg_short_hold:.1f} min)")
         
-        print(f"\nLADDER LEVEL PERFORMANCE:")
-        print(f"{'-'*40}")
+        #print(f"\nLADDER LEVEL PERFORMANCE:")
+        #print(f"{'-'*40}")
         for level in sorted(ladder_stats.keys()):
             stats = ladder_stats[level]
             win_rate = (stats['wins'] / stats['count'] * 100) if stats['count'] > 0 else 0
-            print(f"Level {level}: {stats['count']} trades | P&L: ${stats['pnl']:.2f} | Win Rate: {win_rate:.1f}%")
+            #print(f"Level {level}: {stats['count']} trades | P&L: ${stats['pnl']:.2f} | Win Rate: {win_rate:.1f}%")
         
-        print(f"\nDATA PROCESSING:")
-        print(f"{'-'*40}")
-        print(f"Total Ticks Processed: {self.processed_ticks:,}")
-        print(f"Processing Rate: {self.processed_ticks / len(self.closed_positions) if self.closed_positions else 0:.0f} ticks/trade")
+        #print(f"\nDATA PROCESSING:")
+        #print(f"{'-'*40}")
+        #print(f"Total Ticks Processed: {self.processed_ticks:,}")
+        #print(f"Processing Rate: {self.processed_ticks / len(self.closed_positions) if self.closed_positions else 0:.0f} ticks/trade")
         
         # Save detailed trade log
         self.save_trade_log()
@@ -715,7 +720,7 @@ class TickBasedLadderStrategy:
         df = pd.DataFrame(log_data)
         filename = f"btc_ladder_trades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         df.to_csv(filename, index=False)
-        print(f"\nDetailed trade log saved to: {filename}")
+        #print(f"\nDetailed trade log saved to: {filename}")
 
 # -----------------------------
 # 3. MAIN EXECUTION
@@ -728,17 +733,17 @@ def run_tick_backtest():
     INITIAL_BALANCE = 100
     
     # Date range for backtest (adjust based on available data)
-    START_DATE = datetime(2024, 1, 1)
-    END_DATE = datetime(2024, 1, 2)  # One week for testing
+    START_DATE = datetime(2026, 1, 1)
+    END_DATE = datetime(2026, 1, 7)  # One week for testing
     
-    print("="*80)
-    print("BTCUSD TICK-BASED LADDER STRATEGY BACKTEST")
-    print("Strategy: Multiple BUY_STOPs above + SELL_LIMIT at first level")
-    print("          Multiple SELL_STOPs below + BUY_LIMIT at first level")
-    print(f"Symbol: {SYMBOL}")
-    print(f"Date Range: {START_DATE.date()} to {END_DATE.date()}")
-    print(f"Entry Distance: $100 | TP Distance: $50")
-    print("="*80)
+    #print("="*80)
+    #print("BTCUSD TICK-BASED LADDER STRATEGY BACKTEST")
+    #print("Strategy: Multiple BUY_STOPs above + SELL_LIMIT at first level")
+    #print("          Multiple SELL_STOPs below + BUY_LIMIT at first level")
+    #print(f"Symbol: {SYMBOL}")
+    #print(f"Date Range: {START_DATE.date()} to {END_DATE.date()}")
+    #print(f"Entry Distance: $100 | TP Distance: $50")
+    #print("="*80)
     
     # Initialize strategy
     strategy = TickBasedLadderStrategy(SYMBOL, INITIAL_BALANCE)
@@ -763,44 +768,64 @@ def run_tick_backtest():
         strategy.generate_performance_report()
         
     except Exception as e:
-        print(f"Error during backtest: {e}")
+        #print(f"Error during backtest: {e}")
         import traceback
         traceback.print_exc()
     
     finally:
         # Shutdown MT5
         mt5.shutdown()
-        print("\nBacktest completed. MT5 connection closed.")
+        #print("\nBacktest completed. MT5 connection closed.")
 
 # -----------------------------
 # 4. OPTIMIZATION AND PARAMETER TESTING
 # -----------------------------
+
+def generate_optimization_config(params_dict):
+    keys = params_dict.keys()
+    values = params_dict.values()
+    
+    # Generate all combinations
+    combinations = list(itertools.product(*values))
+    
+    # Format into the list of dictionaries you need
+    parameter_sets = [dict(zip(keys, combo)) for combo in combinations]
+    
+    return parameter_sets
+
 def optimize_parameters():
     """Run optimization for different parameter sets"""
-    parameter_sets = [
-        {'entry_distance': 50, 'tp_distance': 25, 'lot_size': 0.01},
-        {'entry_distance': 100, 'tp_distance': 50, 'lot_size': 0.01},
-        {'entry_distance': 150, 'tp_distance': 75, 'lot_size': 0.01},
-        {'entry_distance': 200, 'tp_distance': 100, 'lot_size': 0.01},
-    ]
+    ranges = {
+        'entry_distance': range(300, 301, 50),  # 10, 20... 100
+        'tp_distance':    [10, 20, 30, 40, 50, 100], #range(10, 31, 10),    # 5, 10... 25
+        'lot_size':       [0.01], # Specific discrete values
+        'steps':          [1],      # 1, 2, 3, 4, 5
+    }
+
+    parameter_sets = generate_optimization_config(ranges)
+
     
     results = []
+
+    strategy = TickBasedLadderStrategy("#BTCUSD", 100)
+    if strategy.initialize_mt5():
+        # Get data (use small sample for optimization)
+        tick_data = strategy.get_tick_data_range(
+            datetime(2026, 1, 23),
+            datetime(2026, 1, 24)
+        )
     
-    for params in parameter_sets:
-        print(f"\nTesting parameters: Entry=${params['entry_distance']}, TP=${params['tp_distance']}")
-        
-        strategy = TickBasedLadderStrategy("BTCUSD", 10000)
-        strategy.entry_distance = params['entry_distance']
-        strategy.tp_distance = params['tp_distance']
-        strategy.lot_size = params['lot_size']
-        
-        if strategy.initialize_mt5():
-            # Get data (use small sample for optimization)
-            tick_data = strategy.get_tick_data_range(
-                datetime(2024, 1, 1),
-                datetime(2024, 1, 3)
-            )
+        for params in parameter_sets:
+            print(f"\nTesting parameters: Entry=${params['entry_distance']}, TP=${params['tp_distance']}, Steps={params['steps']}")
             
+            strategy = TickBasedLadderStrategy("#BTCUSD", 100)
+            strategy.entry_distance = params['entry_distance']
+            strategy.tp_distance = params['tp_distance']
+            strategy.lot_size = params['lot_size']
+            strategy.num_steps = params['steps']
+            
+            
+                
             if tick_data:
                 strategy.run_tick_backtest(tick_data)
                 
@@ -809,18 +834,19 @@ def optimize_parameters():
                     'total_pnl': strategy.total_pnl,
                     'win_rate': (strategy.winning_trades / strategy.total_trades * 100) if strategy.total_trades > 0 else 0,
                     'profit_factor': abs(sum([p.pnl for p in strategy.closed_positions if p.pnl > 0]) / 
-                                       sum([p.pnl for p in strategy.closed_positions if p.pnl <= 0])) if strategy.closed_positions else 0
+                                    sum([p.pnl for p in strategy.closed_positions if p.pnl <= 0])) if strategy.closed_positions else 0
                 })
+                
             
-            mt5.shutdown()
-    
+    mt5.shutdown()
+
     # Display optimization results
     print(f"\n{'='*60}")
     print("OPTIMIZATION RESULTS")
     print(f"{'='*60}")
     
     for i, result in enumerate(results, 1):
-        print(f"\nSet {i}: Entry=${result['params']['entry_distance']}, TP=${result['params']['tp_distance']}")
+        print(f"\nSet {i}: Entry=${result['params']['entry_distance']}, TP=${result['params']['tp_distance']}, Steps={result['params']['steps']}")
         print(f"  Total P&L: ${result['total_pnl']:.2f}")
         print(f"  Win Rate: {result['win_rate']:.1f}%")
         print(f"  Profit Factor: {result['profit_factor']:.2f}")
@@ -831,12 +857,12 @@ def optimize_parameters():
 if __name__ == "__main__":
     # Install required packages first
     import sys
-    print("Checking required packages...")
+    #print("Checking required packages...")
     
     try:
         import MetaTrader5
     except ImportError:
-        print("Installing MetaTrader5...")
+        #print("Installing MetaTrader5...")
         import subprocess
         subprocess.check_call([sys.executable, "-m", "pip", "install", "MetaTrader5"])
         import MetaTrader5 as mt5
@@ -844,7 +870,7 @@ if __name__ == "__main__":
     try:
         import pandas as pd
     except ImportError:
-        print("Installing pandas...")
+        #print("Installing pandas...")
         import subprocess
         subprocess.check_call([sys.executable, "-m", "pip", "install", "pandas"])
         import pandas as pd
@@ -852,13 +878,13 @@ if __name__ == "__main__":
     try:
         import numpy as np
     except ImportError:
-        print("Installing numpy...")
+        #print("Installing numpy...")
         import subprocess
         subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy"])
         import numpy as np
     
     # Run the backtest
-    run_tick_backtest()
+    # run_tick_backtest()
     
     # Optional: Run optimization
-    # optimize_parameters()
+    optimize_parameters()
