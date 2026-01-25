@@ -5,9 +5,28 @@ import csv
 import os
 import MetaTrader5 as mt5
 from deepticks import TickBasedLadderStrategy
+import concurrent.futures
+import multiprocessing
+from functools import partial
+
+tick_data_global = None
+symbol_global = None
+count_global = None
+params_len_global = None
+workers_global = None
+
+
+def init_worker(shared_data, shared_symbol, shared_workers, shared_params_len):
+    global tick_data_global, symbol_global, count_global, workers_global, params_len_global
+
+    tick_data_global = shared_data
+    symbol_global = shared_symbol
+    count_global = 0
+    workers_global = shared_workers
+    params_len_global = shared_params_len
 
 def optimize_parameters():
-    """Run optimization for different parameter sets and export results to CSV"""
+    """Run optimization for different parameter sets using parallel processing"""
     
     SYMBOL = "GER40"
     ranges = {
@@ -19,147 +38,142 @@ def optimize_parameters():
     }
 
     parameter_sets = generate_optimization_config(ranges)
-    for p in parameter_sets:
-        print(p)
-    return
-    cumulative_results = []
-
-    start_date = datetime(2025, 1, 1)
-    end_date = datetime(2026, 1, 24) # End date not included
-
-    date_ranges = [(start_date, end_date)]
-
-    if end_date - start_date >= timedelta(days=58):
-        days_per_month = 30.44
-        days_30 = timedelta(days=30)
-        n_months = int((end_date - start_date).days // days_per_month)
-        rem = (end_date - start_date).days % days_per_month
-        rem_days = timedelta(days=rem)
-        date_ranges = [(start_date + days_30 * i , start_date + days_30 * (i + 1)) for i in range(n_months)]
-        date_ranges += [((start_date + (days_30 * (n_months - 1))), (start_date + rem_days  ))]
-
     
-    for i, (start_date, end_date) in enumerate(date_ranges):
-        print(f"Begining tests for month {i} [{start_date.isoformat()} - {end_date.isoformat()}]")
-        skips = [0, 1, ]
-		
-        if i in skips:
-            print("Skipping month...")
-            continue
-        # Initialize results list with more comprehensive metrics
-        results = []
+    # Reduce parameter sets initially if needed
+    # parameter_sets = parameter_sets[:50]  # Test with fewer first
+    
+    start_date = datetime(2025, 11, 1)
+    end_date = datetime(2026, 1, 24)
+    
+    # Get data once (outside the loop)
+    strategy = TickBasedLadderStrategy(SYMBOL, 100)
+    if not strategy.initialize_mt5():
+        print("Failed to initialize MT5")
+        return
+    
+    tick_data = strategy.get_tick_data_range(start_date, end_date)
+    mt5.shutdown()
+    
+    if not tick_data:
+        print("Failed to get data")
+        return
+    
+    
+    # Use multiprocessing
+    num_workers = multiprocessing.cpu_count() - 1
+    print(f"Using {num_workers} parallel workers")
+    
+    results = []
+    
+    # Process in batches to avoid memory issues
+    batch_size = 25 # Per core
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=num_workers, initializer=init_worker,
+        initargs=(tick_data, SYMBOL, num_workers, len(parameter_sets))
+        ) as executor:
+        print("Begining multiprocessing, this could take a while...")
+        results = list(executor.map(test_parameter_set, parameter_sets, chunksize=batch_size))
+    
+    # Export results
+    export_to_csv(results, "optimization_results_parallel.csv")
+    display_summary(results)
+    
+    return results
+	
+# Define a function to test a single parameter set
+def test_parameter_set(params):
+    """Test a single parameter set and return results"""
+    global count_global
+    
+    if count_global % 20 == 0:
+        print(f"Testing {count_global}/{params_len_global//workers_global - 1}")
+    
+    strategy = TickBasedLadderStrategy(symbol_global, 100)
+    strategy.initialize_mt5()
+    
+    strategy.entry_distance = params['entry_distance']
+    strategy.tp_distance = params['tp_distance']
+    strategy.sl_distance = params['sl_distance']
+    strategy.lot_size = params['lot_size']
+    strategy.num_steps = params['steps']
+    
+    strategy.run_tick_backtest(tick_data_global)
+    
+    # Calculate metrics (same as before)
+    total_trades = strategy.total_trades
+    winning_trades = strategy.winning_trades
+    losing_trades = total_trades - winning_trades if total_trades > 0 else 0
+    
+    positive_pnl = sum([p.pnl for p in strategy.closed_positions if p.pnl > 0])
+    negative_pnl = abs(sum([p.pnl for p in strategy.closed_positions if p.pnl <= 0]))
+    
+    phantom_pnls = [p.phantom_pnl for p in strategy.closed_positions if p.phantom]
+
+    total_phantom_pnl = sum(phantom_pnls)
+    avg_phantom_pnl = np.mean(phantom_pnls)
+    
+    # Avoid division by zero
+    profit_factor = positive_pnl / negative_pnl if negative_pnl > 0 else 0
+    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+    
+    # Calculate average win/loss
+    avg_win = positive_pnl / winning_trades if winning_trades > 0 else 0
+    avg_loss = negative_pnl / losing_trades if losing_trades > 0 else 0
+    
+    # Calculate expectancy
+    expectancy = (win_rate/100 * avg_win) - ((100-win_rate)/100 * avg_loss) if total_trades > 0 else 0
+    
+    # Calculate max drawdown (simplified - you might want to implement proper drawdown calculation)
+    cumulative_pnl = 0
+    max_drawdown = 0
+    peak = 0
+    
+    # Sort positions by close time if available
+    closed_positions_sorted = sorted(strategy.closed_positions, 
+                                    key=lambda x: x.close_time if hasattr(x, 'close_time') else 0)
+    
+    for pos in closed_positions_sorted:
+        cumulative_pnl += pos.pnl
+        if cumulative_pnl > peak:
+            peak = cumulative_pnl
+        drawdown = peak - cumulative_pnl
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+    
+    result = {
+        # Parameters
+        'entry_distance': params['entry_distance'],
+        'tp_distance': params['tp_distance'],
+        'sl_distance': params['sl_distance'],
+        'lot_size': params['lot_size'],
+        'steps': params['steps'],
         
-        strategy = TickBasedLadderStrategy(SYMBOL, 100)
-        if strategy.initialize_mt5():
-            # Get data
-            tick_data = strategy.get_tick_data_range(
-                start_date,
-                end_date
-            )
+        # Performance metrics
+        'total_pnl': strategy.total_pnl,
+        'total_trades': total_trades,
+        'winning_trades': winning_trades,
+        'losing_trades': losing_trades,
+        'win_rate': win_rate,
+        'profit_factor': profit_factor,
+        'early_tps': strategy.early_tps,
+        'total_phantom_pnl': total_phantom_pnl,
+        'avg_phantom_pnl': avg_phantom_pnl,
+        
+        # Advanced metrics
+        'avg_win': avg_win,
+        'avg_loss': avg_loss,
+        'expectancy': expectancy,
+        'max_drawdown': max_drawdown,
+        'profit_loss_ratio': abs(avg_win / avg_loss) if avg_loss > 0 else 0,
+        
+        # Risk metrics
+        'risk_reward_ratio': params['tp_distance'] / (params['tp_distance'] / 2),
+        'sharpe_ratio': strategy.total_pnl / max_drawdown if max_drawdown > 0 else 0,
+    }
+    count_global += 1
+    # strategy.shutdown()  # Add this method to your strategy if needed
+    return result
 
-            if not tick_data:
-                print(f"Failed to get data")
-                continue
-            
-            for n, params in enumerate(parameter_sets):
-                # print(f"\nTesting parameters: Entry=${params['entry_distance']}, TP=${params['tp_distance']}, Steps={params['steps']}")
-                if n % 5 == 0:
-                    print(f"{n} / {len(parameter_sets)}")
-                
-                # Reset strategy for each parameter set
-                strategy = TickBasedLadderStrategy(SYMBOL, 100)
-                strategy.entry_distance = params['entry_distance']
-                strategy.tp_distance = params['tp_distance']
-                strategy.sl_distance = params['sl_distance']
-                strategy.lot_size = params['lot_size']
-                strategy.num_steps = params['steps']
-                
-                if tick_data:
-                    strategy.run_tick_backtest(tick_data)
-                    
-                    # Calculate key metrics
-                    total_trades = strategy.total_trades
-                    winning_trades = strategy.winning_trades
-                    losing_trades = total_trades - winning_trades if total_trades > 0 else 0
-                    
-                    # Calculate profit/loss sums
-                    positive_pnl = sum([p.pnl for p in strategy.closed_positions if p.pnl > 0])
-                    negative_pnl = abs(sum([p.pnl for p in strategy.closed_positions if p.pnl <= 0]))
-
-                    phantom_pnls = [p.phantom_pnl for p in strategy.closed_positions if p.phantom]
-
-                    total_phantom_pnl = sum(phantom_pnls)
-                    avg_phantom_pnl = np.mean(phantom_pnls)
-                    
-                    # Avoid division by zero
-                    profit_factor = positive_pnl / negative_pnl if negative_pnl > 0 else 0
-                    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-                    
-                    # Calculate average win/loss
-                    avg_win = positive_pnl / winning_trades if winning_trades > 0 else 0
-                    avg_loss = negative_pnl / losing_trades if losing_trades > 0 else 0
-                    
-                    # Calculate expectancy
-                    expectancy = (win_rate/100 * avg_win) - ((100-win_rate)/100 * avg_loss) if total_trades > 0 else 0
-                    
-                    # Calculate max drawdown (simplified - you might want to implement proper drawdown calculation)
-                    cumulative_pnl = 0
-                    max_drawdown = 0
-                    peak = 0
-                    
-                    # Sort positions by close time if available
-                    closed_positions_sorted = sorted(strategy.closed_positions, 
-                                                    key=lambda x: x.close_time if hasattr(x, 'close_time') else 0)
-                    
-                    for pos in closed_positions_sorted:
-                        cumulative_pnl += pos.pnl
-                        if cumulative_pnl > peak:
-                            peak = cumulative_pnl
-                        drawdown = peak - cumulative_pnl
-                        if drawdown > max_drawdown:
-                            max_drawdown = drawdown
-                    
-                    results.append({
-                        # Parameters
-                        'entry_distance': params['entry_distance'],
-                        'tp_distance': params['tp_distance'],
-                        'sl_distance': params['sl_distance'],
-                        'lot_size': params['lot_size'],
-                        'steps': params['steps'],
-                        
-                        # Performance metrics
-                        'total_pnl': strategy.total_pnl,
-                        'total_trades': total_trades,
-                        'winning_trades': winning_trades,
-                        'losing_trades': losing_trades,
-                        'win_rate': win_rate,
-                        'profit_factor': profit_factor,
-                        'early_tps': strategy.early_tps,
-                        'total_phantom_pnl': total_phantom_pnl,
-                        'avg_phantom_pnl': avg_phantom_pnl,
-                        
-                        # Advanced metrics
-                        'avg_win': avg_win,
-                        'avg_loss': avg_loss,
-                        'expectancy': expectancy,
-                        'max_drawdown': max_drawdown,
-                        'profit_loss_ratio': abs(avg_win / avg_loss) if avg_loss > 0 else 0,
-                        
-                        # Risk metrics
-                        'risk_reward_ratio': params['tp_distance'] / (params['tp_distance'] / 2),
-                        'sharpe_ratio': strategy.total_pnl / max_drawdown if max_drawdown > 0 else 0,
-                    })
-            
-            mt5.shutdown()
-            
-            # Export to CSV
-            export_to_csv(results, f"optimization_results [{i}].csv")
-            
-            # Display summary
-            display_summary(results)
-        cumulative_results.append(results)
-            
-    return cumulative_results
 
 def export_to_csv(results, filename=f'optimization_results.csv'):
     """Export optimization results to CSV file"""
@@ -309,7 +323,14 @@ def generate_optimization_config(ranges):
     values = ranges.values()
     combinations = list(itertools.product(*values))
     
-    return [dict(zip(keys, combo)) for combo in combinations]
+    configs = [dict(zip(keys, combo)) for combo in combinations]
+
+    for i, c in enumerate(configs):
+        c["id"] = i
+    
+    return configs
 
 if __name__ == "__main__":
-    optimize_parameters()
+    import timeit
+    total_time = timeit.timeit("optimize_parameters()", setup="from __main__ import optimize_parameters", number = 1)
+    print(f"Execution time: {total_time / 1000 / 60} mins")

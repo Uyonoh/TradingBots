@@ -79,11 +79,11 @@ class TickBasedLadderStrategy:
         self.equity = account_balance
         
         # Strategy parameters
-        self.entry_distance = 100.0  # Fixed distance for ladder steps
-        self.tp_distance = 140      # Take profit distance 
+        self.entry_distance = 150.0  # Fixed distance for ladder steps
+        self.tp_distance = 150      # Take profit distance 
         self.sl_distance = 70
         self.retracement_threshold = .80  # 80% of max tp
-        self.min_tp = .25                   # in USD
+        self.min_tp = 1.25                   # in USD
         self.lot_size = 0.01         # Base lot size (0.01 BTC)
         self.num_steps = 1         # Number of ladder steps above and below
         self.position_breadth = self.tp_distance * 2
@@ -145,17 +145,17 @@ class TickBasedLadderStrategy:
         
         #print(f"Initialized {self.symbol}: Point={self.symbol_info.point}, Spread={self.symbol_info.spread}")
         return True
-    
-    def get_tick_data_range(self, start_date: datetime, end_date: datetime, 
-                           max_ticks: int = 10000000) -> List[Tick]:
-        """Retrieve tick data for the specified range"""
-        #print(f"Fetching tick data from {start_date} to {end_date}")
         
-        # Convert to timestamp
+    def get_ticks_file(self, start_date, end_date):
+        return f"{self.symbol}_ticks[{start_date.date().isoformat()} - {end_date.date().isoformat()}].csv"
+    
+    def download_ticks(self, start_date, end_date):
+        print("Downloading ticks...")
+
         from_date = int(start_date.timestamp())
         to_date = int(end_date.timestamp())
+
         
-        # Get ticks
         ticks = mt5.copy_ticks_range(self.symbol, from_date, to_date, mt5.COPY_TICKS_ALL)
         
         if ticks is None or len(ticks) == 0:
@@ -163,11 +163,50 @@ class TickBasedLadderStrategy:
             ticks = mt5.copy_ticks_from(self.symbol, from_date, 1000000, mt5.COPY_TICKS_ALL)
             if ticks is None or len(ticks) == 0:
                 return []
+            
+
+        ticks_df = pd.DataFrame(ticks)
+        ticks_df["time"] = pd.to_datetime(ticks_df["time"], unit="s")
+
+        file_path = self.get_ticks_file(start_date, end_date)
+        ticks_df.to_csv(file_path, index=False)
+        print(f"Successfully saved ticks to {file_path}")
         
+    
+    def get_tick_data_range(self, start_date: datetime, end_date: datetime, 
+                           max_ticks: int = 10000000) -> List[Tick]:
+        """Retrieve tick data for the specified range"""
+        print(f"Fetching tick data from {start_date} to {end_date}")
+        
+        downloaded = False
+        def read_csv():
+            print("Reading CSV")
+            dtypes = {
+                'bid': 'float32',
+                'ask': 'float32',
+                'last': 'float32',
+                'volume': 'float32',
+                'time_msc': 'int32',
+                'flags': 'int32',
+                'volume_real': 'float32',           
+            }
+            #file_path = "GER40_ticks[2025-12-01 - 2026-01-24].csv"
+            file_path = self.get_ticks_file(start_date, end_date)
+            ticks_df = pd.read_csv(file_path, dtype=dtypes, usecols=['time', 'bid', 'ask', 'volume']) 
+            ticks = ticks_df.to_dict(orient="records")
+            print("Done")
+            return ticks
+            
+        try:
+            ticks = read_csv()
+        except Exception:
+            self.download_ticks(start_date, end_date)
+            ticks = read_csv()
+            
         # Convert to list of Tick objects
         tick_objects = []
         for tick in ticks:
-            tick_time = datetime.fromtimestamp(tick['time'])
+            tick_time = datetime.fromisoformat(tick['time']) #if not downloaded else datetime.fromtimestamp(tick['time'])
             tick_obj = Tick(
                 time=tick_time,
                 bid=tick['bid'],
@@ -181,10 +220,10 @@ class TickBasedLadderStrategy:
     
     def setup_daily_ladder(self, open_price: float, current_time: datetime):
         """Setup the ladder orders for the day based on opening price"""
-        #print(f"\n{'='*60}")
-        #print(f"Setting up daily ladder at {current_time}")
-        #print(f"Open Price: ${open_price:.2f}")
-        #print(f"{'='*60}")
+        print(f"\n{'='*60}")
+        print(f"Setting up daily ladder at {current_time}")
+        print(f"Open Price: ${open_price:.2f}")
+        print(f"{'='*60}")
         
         self.daily_open_price = open_price
         self.current_day = current_time.date()
@@ -489,9 +528,9 @@ class TickBasedLadderStrategy:
     
     def end_of_day_closeout(self, tick: Tick):
         """Close all positions and cancel all orders at end of day"""
-        #print(f"\n{'='*60}")
-        #print(f"END OF DAY CLOSEOUT at {tick.time}")
-        #print(f"{'='*60}")
+        print(f"\n{'='*60}")
+        print(f"END OF DAY CLOSEOUT at {tick.time}")
+        print(f"{'='*60}")
         
         # Close all open positions at current market price
         positions_to_close = self.open_positions.copy()
@@ -628,6 +667,7 @@ class TickBasedLadderStrategy:
             if tick.time.time() >= self.trading_end_time:
                 self.end_of_day_closeout(tick)
                 break
+        self.end_of_day_closeout(day_ticks[-1])
     
     def update_equity(self, tick: Tick):
         """Update current equity including floating P&L"""
@@ -646,14 +686,14 @@ class TickBasedLadderStrategy:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[ORDER] {message}"
         self.order_log.append(log_entry)
-        #print(log_entry)
+        print(log_entry)
     
     def log_trade(self, message: str):
         """Log trade-related messages"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[TRADE] {message}"
         self.trade_log.append(log_entry)
-        #print(log_entry)
+        print(log_entry)
     
     def generate_performance_report(self):
         """Generate comprehensive performance report"""
@@ -794,8 +834,8 @@ def run_tick_backtest():
     INITIAL_BALANCE = 100
     
     # Date range for backtest (adjust based on available data)
-    START_DATE = datetime(2026, 1, 1)
-    END_DATE = datetime(2026, 1, 3)  # One week for testing
+    START_DATE = datetime(2025, 11, 1)
+    END_DATE = datetime(2026, 1, 24)  # One week for testing
 
     # Initialize strategy
     strategy = TickBasedLadderStrategy(SYMBOL, INITIAL_BALANCE)
@@ -949,6 +989,7 @@ if __name__ == "__main__":
     
     # Run the backtest
     run_tick_backtest()
+    input("Enter to exit")
     
     # Optional: Run optimization
     # from deepticks_optimizer import optimize_parameters
