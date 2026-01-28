@@ -17,6 +17,9 @@ makedb.py
 *.db
 *.sqlite3
 
-# Logging
+# Logging and data
+/dax_ticks
+/tick_data
 *.log
 *.csv
+*.parquet

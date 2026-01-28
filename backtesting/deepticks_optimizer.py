@@ -6,24 +6,20 @@ import os
 import MetaTrader5 as mt5
 from deepticks import TickBasedLadderStrategy
 import concurrent.futures
+from tqdm.notebook import tqdm  # Specialized for Colab/Jupyter
 import multiprocessing
 from functools import partial
 
 tick_data_global = None
 symbol_global = None
-count_global = None
-params_len_global = None
-workers_global = None
 
 
-def init_worker(shared_data, shared_symbol, shared_workers, shared_params_len):
-    global tick_data_global, symbol_global, count_global, workers_global, params_len_global
+def init_worker(shared_data, shared_symbol):
+    global tick_data_global, symbol_global
 
     tick_data_global = shared_data
     symbol_global = shared_symbol
-    count_global = 0
-    workers_global = shared_workers
-    params_len_global = shared_params_len
+   
 
 def optimize_parameters():
     """Run optimization for different parameter sets using parallel processing"""
@@ -42,7 +38,7 @@ def optimize_parameters():
     # Reduce parameter sets initially if needed
     # parameter_sets = parameter_sets[:50]  # Test with fewer first
     
-    start_date = datetime(2025, 11, 1)
+    start_date = datetime(2026, 1, 1)
     end_date = datetime(2026, 1, 24)
     
     # Get data once (outside the loop)
@@ -60,33 +56,48 @@ def optimize_parameters():
     
     
     # Use multiprocessing
-    num_workers = multiprocessing.cpu_count() - 1
-    print(f"Using {num_workers} parallel workers")
-    
+    #num_workers = multiprocessing.cpu_count() - 1
     results = []
+    parameter_sets = parameter_sets[:5]
+    total_tasks = len(parameter_sets)
     
-    # Process in batches to avoid memory issues
-    batch_size = 25 # Per core
+    # On Colab Free, cpu_count is usually 2. 
+    # Using all 2 is fine as the 'main' process just sits and waits.
+    num_workers = os.cpu_count() 
+    
+    print(f"🚀 Starting optimization on {num_workers} cores...")
+    print(f"📊 Total Parameter Sets: {total_tasks}")
+
+    # Start the pool
     with concurrent.futures.ProcessPoolExecutor(
-        max_workers=num_workers, initializer=init_worker,
-        initargs=(tick_data, SYMBOL, num_workers, len(parameter_sets))
-        ) as executor:
-        print("Begining multiprocessing, this could take a while...")
-        results = list(executor.map(test_parameter_set, parameter_sets, chunksize=batch_size))
-    
-    # Export results
+        max_workers=num_workers, 
+        initializer=init_worker, 
+        initargs=(tick_data, SYMBOL)
+    ) as executor:
+        
+        # 2. Submit all tasks and store them in a dictionary
+        # This doesn't run them yet, it just queues them
+        future_to_params = {executor.submit(test_parameter_set, p): p for p in parameter_sets}
+        
+        # 3. Use tqdm to track progress as tasks finish
+        # This provides a live-updating bar with ETA
+        with tqdm(total=total_tasks, desc="Optimizing", unit="set") as pbar:
+            for future in concurrent.futures.as_completed(future_to_params):
+                try:
+                    data = future.result()
+                    results.append(data)
+                except Exception as e:
+                    print(f"Set failed: {e}")
+                finally:
+                    pbar.update(1) # Move the bar forward by 1
+
     export_to_csv(results, "optimization_results_parallel.csv")
     display_summary(results)
-    
     return results
 	
 # Define a function to test a single parameter set
 def test_parameter_set(params):
     """Test a single parameter set and return results"""
-    global count_global
-    
-    if count_global % 20 == 0:
-        print(f"Testing {count_global}/{params_len_global//workers_global - 1}")
     
     strategy = TickBasedLadderStrategy(symbol_global, 100)
     strategy.initialize_mt5()
@@ -170,7 +181,6 @@ def test_parameter_set(params):
         'risk_reward_ratio': params['tp_distance'] / (params['tp_distance'] / 2),
         'sharpe_ratio': strategy.total_pnl / max_drawdown if max_drawdown > 0 else 0,
     }
-    count_global += 1
     # strategy.shutdown()  # Add this method to your strategy if needed
     return result
 

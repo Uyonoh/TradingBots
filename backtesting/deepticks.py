@@ -220,10 +220,10 @@ class TickBasedLadderStrategy:
     
     def setup_daily_ladder(self, open_price: float, current_time: datetime):
         """Setup the ladder orders for the day based on opening price"""
-        print(f"\n{'='*60}")
-        print(f"Setting up daily ladder at {current_time}")
-        print(f"Open Price: ${open_price:.2f}")
-        print(f"{'='*60}")
+        #print(f"\n{'='*60}")
+        #print(f"Setting up daily ladder at {current_time}")
+        #print(f"Open Price: ${open_price:.2f}")
+        #print(f"{'='*60}")
         
         self.daily_open_price = open_price
         self.current_day = current_time.date()
@@ -528,9 +528,9 @@ class TickBasedLadderStrategy:
     
     def end_of_day_closeout(self, tick: Tick):
         """Close all positions and cancel all orders at end of day"""
-        print(f"\n{'='*60}")
-        print(f"END OF DAY CLOSEOUT at {tick.time}")
-        print(f"{'='*60}")
+        #print(f"\n{'='*60}")
+        #print(f"END OF DAY CLOSEOUT at {tick.time}")
+        #print(f"{'='*60}")
         
         # Close all open positions at current market price
         positions_to_close = self.open_positions.copy()
@@ -686,14 +686,14 @@ class TickBasedLadderStrategy:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[ORDER] {message}"
         self.order_log.append(log_entry)
-        print(log_entry)
+        #print(log_entry)
     
     def log_trade(self, message: str):
         """Log trade-related messages"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[TRADE] {message}"
         self.trade_log.append(log_entry)
-        print(log_entry)
+        #print(log_entry)
     
     def generate_performance_report(self):
         """Generate comprehensive performance report"""
