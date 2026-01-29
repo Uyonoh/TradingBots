@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import datetime as DT
 from datetime import datetime, timedelta, timezone
 import calendar
 import pytz
@@ -18,14 +19,14 @@ PRO_SETUP = {
     "bias_filter": {"enabled": True, "buy_threshold": 0.75, "sell_threshold": 0.25},
     "entry_conditions": {"15min_buffer": 10, "velocity_multiplier": 1.5, "lookback_period": "60min"},
     "risk_management": {
-        "initial_sl": [70, 90], 
+        "initial_sl": [50, 90], 
         "trailing_stages": [
             {"min_profit": 0, "max_profit": 50, "retention": -1},
-            #{"min_profit": 50, "max_profit": 100, "retention": -1},
-            #{"min_profit": 100, "max_profit": 150, "retention": 0.5},
-            #{"min_profit": 150, "max_profit": 300, "retention": 0.7},
-            #{"min_profit": 300, "max_profit": 400, "retention": 0.8},
-            {"min_profit": 50, "retention": -1}
+            {"min_profit": 50, "max_profit": 100, "retention": 0.7},
+            {"min_profit": 100, "max_profit": 150, "retention": 0.75},
+            {"min_profit": 150, "max_profit": 300, "retention": 0.8},
+            {"min_profit": 300, "max_profit": 400, "retention": 0.85},
+            {"min_profit": 400, "retention": 0.9}
         ],
         "tp_override": {"fast_threshold": 30, "slow_threshold": 180}
     },
@@ -100,7 +101,6 @@ class SignalPrecomputer:
             h, l, c = x.max(), x.min(), x.iloc[-1]
             return (c - l) / (h - l) if not h == l else 0.5
             
-            
         rc = days.apply(calc_rc)
         # 4. Vectorised Bias Mapping (2026 Standard)
         conditions = [
@@ -111,7 +111,7 @@ class SignalPrecomputer:
         
         # default="straddle" handles the 'else' case
         biases = pd.Series(np.select(conditions, choices, default="straddle"), index=rc.index)
-        biases = biases.shift(1, fill_value="buy")
+        biases = biases.shift(1, fill_value="straddle")
         
         return biases.to_dict()
 
@@ -127,6 +127,58 @@ class SignalPrecomputer:
 # -------------------------------------------------------------------
 # 3. HIGH-SPEED ENGINE (NUMPY CORE)
 # -------------------------------------------------------------------
+def is_safe_dax_trading_period(df_index):
+    """
+    Checks if a given timestamp falls within the refined 'safe' DAX trading windows.
+
+    Safe periods: 
+    1. Morning session after open noise (09:30 - 11:30 CET)
+    2. Afternoon session before market close noise (14:00 - 17:20 CET)
+    """
+    
+    # Ensure the index is localized before extracting H/M properties
+    if df_index.tz is None:
+        raise ValueError("DataFrame index must be timezone-aware (e.g., 'Europe/Berlin') before applying this filter.")
+        
+    # df_index = df_index.tz_convert(CET)
+    h = df_index.hour
+    m = df_index.minute
+    
+    # Combine hour and minute into a single integer for easy comparison (e.g., 930 for 09:30)
+    time_val = h * 100 + m
+    
+    # --- Suggestion 1 & 2: Avoid Open/Close Noise & Lunch Lull ---
+    
+    # Define the two safe windows
+    morning_session = (time_val >= 930) & (time_val <= 1130)
+    afternoon_session = (time_val >= 1400) & (time_val <= 1720) # Ends before the 17:30 auction
+
+    # --- Suggestion 3: US Open Handover (We add a 'pause' around 15:30 CET) ---
+    # The market is safest *before* the US opens, then consolidates the move afterward.
+    # The afternoon session (14:00-17:20) already covers this, so we combine the checks.
+
+    is_safe = morning_session | afternoon_session
+    
+    # Returns a boolean Series you can use as a mask
+    return is_safe
+
+def get_todays_open_price(df, index):
+    """
+    Returns the price at the 09:00 Frankfurt Open for each day.
+    """
+    mid_cet = (df['bid'] + df['ask']) / 2
+    
+    # 1. Ensure we are in Frankfurt time
+    mid_cet.index = index # = mid.dt.tz_convert('Europe/Berlin')
+    
+    # 2. Filter for everything from 09:00 onwards
+    post_open = mid_cet[mid_cet.index.time >= DT.time(9, 0)]
+    
+    # 3. Group by date and take the first value (the 09:00 price)
+    daily_opens = post_open.groupby(post_open.index.date).first()
+    
+    # Return as a dictionary mapping {date: open_price}
+    return daily_opens.to_dict()
 
 def process_chunk_parallel(year, month, config):
     """
@@ -138,10 +190,12 @@ def process_chunk_parallel(year, month, config):
         print(f"File not found: {path}")
         return []
     
-    df = pd.read_parquet(path)
+    server_df = pd.read_parquet(path)
     zone = get_server_timezone(year, month, 1)
     # print(f"Server timezone: {zone}")
-    df.index = pd.to_datetime(df.index).tz_localize(zone)
+    server_df.index = pd.to_datetime(server_df.index).tz_localize(zone)
+    server_df['is_safe_window'] = is_safe_dax_trading_period(server_df.index)
+    df = server_df#[server_df['is_safe_window'] == True]
     
     # 1. Precompute Signals (Vectorized)
     biases = SignalPrecomputer.get_daily_bias(df, config['bias_filter']['buy_threshold'], config['bias_filter']['sell_threshold'])
@@ -162,6 +216,7 @@ def process_chunk_parallel(year, month, config):
     hours = df_cet_idx.hour
     minutes = df_cet_idx.minute
     dates = df_cet_idx.date
+    daily_opens = get_todays_open_price(df, df_cet_idx)
     
     trades = []
     in_trade = False
@@ -259,14 +314,14 @@ def process_chunk_parallel(year, month, config):
             if bias_str == 'buy':
                 if curr_ask <= g_low + buffer: touched_opposite = True
                 
-                if touched_opposite and curr_ask >= g_high - buffer and velocity_signals[i]:
+                if touched_opposite and curr_ask >= g_high - buffer and velocity_signals[i] and curr_ask > daily_opens[curr_date]:
                     in_trade, direction, entry_p, entry_t, max_pnl = True, 'buy', curr_bid, curr_time, 0.0
                     # print("Entered buy")
                     # print(df.iloc[[i]])
             elif bias_str == 'sell':
                 if curr_bid >= g_high - buffer: touched_opposite = True
                 
-                if touched_opposite and curr_bid <= g_low + buffer and velocity_signals[i]:
+                if touched_opposite and curr_bid <= g_low + buffer and velocity_signals[i] and curr_bid < daily_opens[curr_date]:
                     in_trade, direction, entry_p, entry_t, max_pnl = True, 'sell', curr_ask, curr_time, 0.0
                     # print("Entered sell")
                     # print(df.iloc[[i]])
@@ -274,23 +329,23 @@ def process_chunk_parallel(year, month, config):
     return trades
     
 def get_lot(equity):
+    lot_size = 0.01
     lot_maps = {
         0: 0.04, # 1.4
-        # 15: 0.05, # 2.8
-        # 20: 0.07, # 4.2
-        # 30: 0.11, # 7
+        15: 0.05, # 2.8
+        20: 0.07, # 4.2
+        30: 0.11, # 7
         50: 0.18, # 14
-        100: 0.36, # 28
-        200: 0.71, # 70
-        500: 1.79, # 105
-        1000: 3.57,
-        5000: 17.86,
+        100: 0.36/2, # 28
+        200: 0.71/2, # 70
+        500: 1.79/2, # 105
+        1000: 3.57/2,
+        5000: 17.86/2,
     }
     
     for lot in lot_maps:
-            lot_size = lot_maps[lot]
             if equity >= lot:
-                continue
+                lot_size = lot_maps[lot]
             else:
                 break
     return lot_size
@@ -402,3 +457,23 @@ if __name__ == "__main__":
     else:
         print("No results")
     # input()
+
+"""
+1. The Importance of "Pre-Market Gaps" and The Open
+The GER40 frequently experiences significant gaps between the previous day's close (5:30 PM CET) and the main open the next morning (9:00 AM CET).
+The Guarded Truth: The market often spends the first 30-90 minutes of the main session "filling the gap" or consolidating the previous night's price action from U.S. and Asian markets. Many institutional traders watch how the index reacts around the previous day's closing price level. The initial market reaction (the first 15-30 mins) can often set the tone for the rest of the day.
+2. The Power of "Opening Range Breakouts" (ORB)
+The Guarded Truth: The index often trends strongly in the direction of the initial move after the market settles down following the initial "noise" of the open. A simple, effective strategy many use is defining the high and low of the first 30 or 60 minutes and only trading the breakout of that range, using the other side of the range as the stop loss. The volatility of the GER40 makes this pattern highly reliable on trend days.
+3. Understanding the "Total Return" Bias
+As mentioned, the GER40 is a performance index.
+The Guarded Truth: This structural difference means that, over time, the index naturally trends slightly higher than a standard "price index" would. While this doesn't help with 15-minute chart scalping, it provides a subtle, long-term bullish bias that buy-side institutional traders are always aware of when structuring longer-term hedges or investments. The "default" trade, absent major news, is often gently long.
+4. The "Pivot Time" of 3:30 PM CET
+The U.S. markets (NYSE/Nasdaq) open at 3:30 PM CET.
+The Guarded Truth: This time often acts as a pivot point for the GER40. The index frequently pauses, reverses, or accelerates significantly at this exact time as a massive wave of U.S. volume hits the global markets. Many experienced traders avoid taking a new position immediately before 3:30 PM CET, preferring to wait until after the initial U.S. open volatility subsides.
+5. Managing Psychological "Drawdown Drag"
+The Guarded Truth: The GER40's speed means losses can accumulate quickly. Experienced traders know that the hardest part isn't managing a single loss, but managing the psychology after several small losses in a row (a "drawdown"). The "closely guarded truth" here is the vital importance of reducing your position size immediately after a series of losses to regain confidence and control, rather than trying to "win back" the money with larger bets.
+
+"""
+
+"""You want to compare the current price (or the price during your "safe" window) to an early reference point, like the opening range high/low or the Central Pivot Range (CPR).
+"""
