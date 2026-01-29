@@ -17,6 +17,10 @@ makedb.py
 *.db
 *.sqlite3
 
+# Config
+*.config
+*.json
+
 # Logging and data
 /dax_ticks
 /tick_data

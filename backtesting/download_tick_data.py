@@ -33,8 +33,8 @@ class TickDownloader:
     def download_ticks(self):
         print("Beginign")
         
-        start_date = datetime(2025, 12, 1)
-        end_date = datetime(2026, 1, 24)
+        start_date = datetime(2026, 1, 28)
+        end_date = datetime(2026, 1, 28)
 
         from_date = int(start_date.timestamp())
         to_date = int(end_date.timestamp())
