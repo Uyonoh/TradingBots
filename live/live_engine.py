@@ -12,27 +12,13 @@ import matplotlib.pyplot as plt
 
 warnings.filterwarnings('ignore')
 
+# Only start monitoring 5-10 mins before entry to ready setup for the day, sleep after close
+
 # -------------------------------------------------------------------
 # 1. CONFIGURATION (Same as original)
 # -------------------------------------------------------------------
 # Make diff vel multipliers and lookbacks for the different opens/times
-PRO_SETUP = {
-    "bias_filter": {"enabled": True, "buy_threshold": 0.75, "sell_threshold": 0.25},
-    "entry_conditions": {"15min_buffer": 10, "velocity_multiplier": 1.5, "lookback_period": "60min"},
-    "risk_management": {
-        "initial_sl": [50, 90], 
-        "trailing_stages": [
-            {"min_profit": 0, "max_profit": 50, "retention": -1},
-            {"min_profit": 50, "max_profit": 100, "retention": 0.7},
-            {"min_profit": 100, "max_profit": 150, "retention": 0.75},
-            {"min_profit": 150, "max_profit": 300, "retention": 0.8},
-            {"min_profit": 300, "max_profit": 400, "retention": 0.85},
-            {"min_profit": 400, "retention": 0.9}
-        ],
-        "tp_override": {"fast_threshold": 30, "slow_threshold": 180}
-    },
-    "session_constraints": {"entry_start": "08:15", "mandatory_close": "17:30"}
-}
+
 PRO_SETUP = {
     'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25}, 
     'entry_conditions': {'15min_buffer': np.int64(10), 'velocity_multiplier': 2.2, 'lookback_period': '60min'}, 
@@ -50,23 +36,6 @@ PRO_SETUP = {
         'session_constraints': {'entry_start': '10:00', 'mandatory_close': '17:00'}
         # "session_constraints": {"entry_start": "08:15", "mandatory_close": "17:30"}
         }
-
-# PRO_SETUP = {
-#     'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25}, 
-#     'entry_conditions': {'15min_buffer': np.int64(5), 'velocity_multiplier': 2.2, 'lookback_period': '60min'}, 
-#     'risk_management': {
-#         'initial_sl': [np.int64(50), np.int64(50)], 
-#         'trailing_stages': [
-#             {'min_profit': 0, 'max_profit': np.int64(30), 'retention': -1}, 
-#             {'min_profit': np.int64(30), 'max_profit': np.int64(60), 'retention': 0.55}, 
-#             {'min_profit': np.int64(60), 'max_profit': np.int64(90), 'retention': 0.6}, 
-#             {'min_profit': np.int64(90), 'max_profit': np.int64(120), 'retention': 0.65}, 
-#             {'min_profit': np.int64(120), 'max_profit': np.int64(150), 'retention': 0.7}, 
-#             {'min_profit': np.int64(150), 'retention': 0.95}
-#             ], 
-#         'tp_override': {'fast_threshold': np.int64(15), 'slow_threshold': np.int64(120)}}, 
-#         'session_constraints': {'entry_start': '10:00', 'mandatory_close': '16:41'}
-#         }
 
 CET = pytz.timezone('Europe/Berlin')
 UTC = pytz.utc
@@ -162,40 +131,6 @@ class SignalPrecomputer:
 # -------------------------------------------------------------------
 # 3. HIGH-SPEED ENGINE (NUMPY CORE)
 # -------------------------------------------------------------------
-def is_safe_dax_trading_period(df_index):
-    """
-    Checks if a given timestamp falls within the refined 'safe' DAX trading windows.
-
-    Safe periods: 
-    1. Morning session after open noise (09:30 - 11:30 CET)
-    2. Afternoon session before market close noise (14:00 - 17:20 CET)
-    """
-    
-    # Ensure the index is localized before extracting H/M properties
-    if df_index.tz is None:
-        raise ValueError("DataFrame index must be timezone-aware (e.g., 'Europe/Berlin') before applying this filter.")
-        
-    # df_index = df_index.tz_convert(CET)
-    h = df_index.hour
-    m = df_index.minute
-    
-    # Combine hour and minute into a single integer for easy comparison (e.g., 930 for 09:30)
-    time_val = h * 100 + m
-    
-    # --- Suggestion 1 & 2: Avoid Open/Close Noise & Lunch Lull ---
-    
-    # Define the two safe windows
-    morning_session = (time_val >= 930) & (time_val <= 1130)
-    afternoon_session = (time_val >= 1400) & (time_val <= 1720) # Ends before the 17:30 auction
-
-    # --- Suggestion 3: US Open Handover (We add a 'pause' around 15:30 CET) ---
-    # The market is safest *before* the US opens, then consolidates the move afterward.
-    # The afternoon session (14:00-17:20) already covers this, so we combine the checks.
-
-    is_safe = morning_session | afternoon_session
-    
-    # Returns a boolean Series you can use as a mask
-    return is_safe
 
 def get_todays_open_price(df, index):
     """
@@ -220,21 +155,34 @@ def process_chunk_parallel(year, month, config):
     Worker function for parallel execution.
     Handles data loading and the high-speed tick loop.
     """
+
+    # -------------------------------
+    #      INITIAL DATA COLLECTION
+    # -------------------------------
     path = Path(f"./dax_ticks/GER40_{year}_{month:02d}.parquet")
     if not path.exists(): 
         print(f"File not found: {path}")
         return []
     
-    server_df = pd.read_parquet(path)
+    df = pd.read_parquet(path)
     zone = get_server_timezone(year, month, 1)
-    # print(f"Server timezone: {zone}")
-    server_df.index = pd.to_datetime(server_df.index).tz_localize(zone)
-    server_df['is_safe_window'] = is_safe_dax_trading_period(server_df.index)
-    df = server_df#[server_df['is_safe_window'] == True]
+    print(f"Server timezone: {zone}")
+    df.index = pd.to_datetime(df.index).tz_localize(zone)
     
-    # 1. Precompute Signals (Vectorized)
+
+    # -------------------------------
+    # COMPUTE DAILY BIAS AND GHOST RANGE
+    # -------------------------------
     biases = SignalPrecomputer.get_daily_bias(df, config['bias_filter']['buy_threshold'], config['bias_filter']['sell_threshold'])
     ghost_ranges = SignalPrecomputer.get_ghost_ranges(df)
+
+
+    # -------------------------------
+    # LOOP INDEFINITELY WHILE MONITORING
+    # MARKET AND COLLECTING DATA, UPDATING SIGNALS.
+    # 
+    # IF ENTRY CONDITIONS ARE MET, TRADE
+    # -------------------------------
     velocity_signals = SignalPrecomputer.compute_velocity(
         df, config['entry_conditions']['velocity_multiplier'], config['entry_conditions']['lookback_period']
     )
@@ -500,194 +448,3 @@ def plot_results(trades):
 #     else:
 #         print("No results")
 #     # input()
-
-
-from skopt import gp_minimize
-from skopt.space import Integer, Real
-from skopt.plots import plot_convergence, plot_objective
-import numpy as np
-
-# -------------------------------------------------------------------
-# DYNAMIC CONFIG GENERATOR
-# -------------------------------------------------------------------
-
-def create_dynamic_config(params):
-    """
-    Converts the flat list of optimization parameters into the PRO_SETUP dict.
-    """
-    (sl, buf, vel, tp_fast, tp_slow, start_off, end_off, 
-     p_step, r_base, r_inc) = params
-
-    # Convert offsets to HH:MM strings
-    start_time = (datetime(2025, 1, 1, 6, 0) + timedelta(minutes=int(start_off))).strftime("%H:%M")
-    end_time = (datetime(2025, 1, 1, 16, 0) + timedelta(minutes=int(end_off))).strftime("%H:%M")
-
-    # Generate 5 Trailing Stages based on Profile
-    # Stage 0 is always retention -1 (Initial SL)
-    stages = [{"min_profit": 0, "max_profit": p_step, "retention": -1}]
-    for i in range(1, 5):
-        m_profit = p_step * i
-        # Clamp retention between 0.1 and 0.95
-        retention = min(0.95, r_base + (i * r_inc))
-        stages.append({
-            "min_profit": m_profit, 
-            "max_profit": m_profit + p_step, 
-            "retention": round(retention, 2)
-        })
-    # Final 'runner' stage
-    stages.append({"min_profit": p_step * 5, "retention": 0.95})
-
-    config = {
-        "bias_filter": {"enabled": True, "buy_threshold": 0.75, "sell_threshold": 0.25},
-        "entry_conditions": {"15min_buffer": buf, "velocity_multiplier": vel, "lookback_period": "60min"},
-        "risk_management": {
-            "initial_sl": [sl, sl],
-            "trailing_stages": stages,
-            "tp_override": {"fast_threshold": tp_fast, "slow_threshold": tp_slow}
-        },
-        "session_constraints": {"entry_start": start_time, "mandatory_close": end_time}
-    }
-    return config
-
-# -------------------------------------------------------------------
-# OBJECTIVE FUNCTION
-# -------------------------------------------------------------------
-
-def full_objective(params):
-    current_config = create_dynamic_config(params)
-    engine = DAXTickEngine(current_config)
-    
-    # We optimize on a 4-month window for speed on i5/8GB RAM
-    results = engine.run_backtest(2025, 1, 2025, 6) 
-    
-    if results.empty or len(results) < 10:
-        return 0.0 # Penalty for no activity
-    
-    # Calculate Risk-Adjusted Return
-    returns = results['profit_ticks']
-    
-    # Using the formula for Sharpe Ratio:
-    # $$S = \frac{E[R_p - R_f]}{\sigma_p}$$
-    # Here we simplify to Mean Profit / Std Dev
-    sharpe = returns.mean() / (returns.std() + 1e-6)
-    
-    # Add a small penalty for Max Drawdown to keep it "stable"
-    cumulative = returns.cumsum()
-    max_dd = (cumulative.expanding().max() - cumulative).max()
-    score = sharpe - (max_dd * 0.001) 
-    
-    return -score
-
-def plot_trailing_logic(config):
-    stages = config['risk_management']['trailing_stages']
-    profits = [s.get('min_profit', 0) for s in stages]
-    retention = [s['retention'] if s['retention'] != -1 else 0 for s in stages]
-    
-    plt.step(profits, retention, where='post', color='orange', label='Retention Rate')
-    plt.title("Optimized Trailing Stop Profile")
-    plt.xlabel("Profit (Ticks)")
-    plt.ylabel("Retention (0.0 - 1.0)")
-    plt.grid(True, alpha=0.3)
-    plt.show()
-
-# -------------------------------------------------------------------
-# RUN OPTIMIZATION
-# -------------------------------------------------------------------
-
-def run_pro_optimization():
-    space = [
-        Integer(50, 120, name='initial_sl'),
-        Integer(5, 20, name='buffer_ticks'),
-        Real(1.2, 2.2, name='velocity_multiplier'),
-        Integer(15, 60, name='tp_fast'),        # Fast TP override mins
-        Integer(120, 300, name='tp_slow'),      # Slow TP override mins
-        Integer(0, 240, name='start_offset'),   # Mins after 06:00
-        Integer(0, 180, name='end_offset'),     # Mins after 16:00
-        Integer(30, 100, name='profit_step'),   # Ticks per stage
-        Real(0.3, 0.7, name='retention_base'),  # Starting retention
-        Real(0.05, 0.2, name='retention_inc')   # How much retention grows per stage
-    ]
-    
-    print("💎 Starting Professional Parameter Search...")
-    res = gp_minimize(full_objective, space, n_calls=50, random_state=42, verbose=True)
-    
-    best_cfg = create_dynamic_config(res.x)
-    print("\n✅ OPTIMIZATION COMPLETE")
-    print(f"Best Session: {best_cfg['session_constraints']['entry_start']} to {best_cfg['session_constraints']['mandatory_close']}")
-    print(f"Best TP Overrides: {best_cfg['risk_management']['tp_override']}")
-    print(f"Best Trailing Stages: {best_cfg['risk_management']['trailing_stages']}")
-    print("="*80)
-    print("BEST CoNFIG")
-    print(best_cfg)
-    print("="*80)
-    
-    return res, best_cfg
-
-if __name__ == "__main__":
-    # Choose your path:
-    choice = input("Enter 'B' for Backtest or 'O' for Optimize: ").upper()
-    
-    if choice == 'O':
-        res, best_params = run_pro_optimization()
-
-        # 1. Convergence Plot: Shows how the AI learned over time
-        plt.figure(figsize=(10, 5))
-        plot_convergence(res)
-        plt.title("Optimizer Convergence (Finding the Peak)")
-        plt.show()
-        
-        # 2. Objective Plot: Shows the 'heat map' of which parameters worked best
-        # This helps you identify if a parameter is too sensitive
-        plot_objective(res)
-        plt.show()
-
-        plot_trailing_logic(best_params)
-        # Update your PRO_SETUP with best_params here if you want to run a final test
-    else:
-        engine = DAXTickEngine(PRO_SETUP)
-        # Example: Run for 2025
-        results = engine.run_backtest(2025, 1, 2026, 1)
-        
-        if not results.empty:
-            results = calculate_equity(results)
-            # results['server_entry_time'] = results['entry_time'].dt.tz_convert(get_server_timezone())
-            # results['server_exit_time'] = results['exit_time'].dt.tz_convert(get_server_timezone())
-            entry_time = pd.to_datetime(results['entry_time']).dt.tz_localize(get_server_timezone())
-            results['server_entry_time'] = entry_time.dt.tz_convert(CET)
-            results.to_csv("DAX_test.csv")
-            win_rate = (results['profit_ticks'] > 0).mean() * 100
-
-            print(f"Backtest Complete.")
-            print(f"Total Trades: {len(results)}")
-            print(f"Win Rate: {win_rate:.2f}%")
-            print(f"Total Profit: $ {results['pnl'].sum():.2f}")
-            print(f"Min profit: $ {results['pnl'].min()}")
-            print(f"Max profit: $ {results['pnl'].max()}")
-            print(f"Avg profit: $ {results['pnl'].mean()}")
-            
-            plot_results(results)
-        else:
-            print("No results")
-
-
-
-
-"""
-1. The Importance of "Pre-Market Gaps" and The Open
-The GER40 frequently experiences significant gaps between the previous day's close (5:30 PM CET) and the main open the next morning (9:00 AM CET).
-The Guarded Truth: The market often spends the first 30-90 minutes of the main session "filling the gap" or consolidating the previous night's price action from U.S. and Asian markets. Many institutional traders watch how the index reacts around the previous day's closing price level. The initial market reaction (the first 15-30 mins) can often set the tone for the rest of the day.
-2. The Power of "Opening Range Breakouts" (ORB)
-The Guarded Truth: The index often trends strongly in the direction of the initial move after the market settles down following the initial "noise" of the open. A simple, effective strategy many use is defining the high and low of the first 30 or 60 minutes and only trading the breakout of that range, using the other side of the range as the stop loss. The volatility of the GER40 makes this pattern highly reliable on trend days.
-3. Understanding the "Total Return" Bias
-As mentioned, the GER40 is a performance index.
-The Guarded Truth: This structural difference means that, over time, the index naturally trends slightly higher than a standard "price index" would. While this doesn't help with 15-minute chart scalping, it provides a subtle, long-term bullish bias that buy-side institutional traders are always aware of when structuring longer-term hedges or investments. The "default" trade, absent major news, is often gently long.
-4. The "Pivot Time" of 3:30 PM CET
-The U.S. markets (NYSE/Nasdaq) open at 3:30 PM CET.
-The Guarded Truth: This time often acts as a pivot point for the GER40. The index frequently pauses, reverses, or accelerates significantly at this exact time as a massive wave of U.S. volume hits the global markets. Many experienced traders avoid taking a new position immediately before 3:30 PM CET, preferring to wait until after the initial U.S. open volatility subsides.
-5. Managing Psychological "Drawdown Drag"
-The Guarded Truth: The GER40's speed means losses can accumulate quickly. Experienced traders know that the hardest part isn't managing a single loss, but managing the psychology after several small losses in a row (a "drawdown"). The "closely guarded truth" here is the vital importance of reducing your position size immediately after a series of losses to regain confidence and control, rather than trying to "win back" the money with larger bets.
-
-"""
-
-"""You want to compare the current price (or the price during your "safe" window) to an early reference point, like the opening range high/low or the Central Pivot Range (CPR).
-"""

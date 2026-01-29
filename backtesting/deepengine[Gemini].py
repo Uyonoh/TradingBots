@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import datetime as DT
 from datetime import datetime, timedelta, timezone
 import calendar
 import pytz
@@ -15,58 +14,61 @@ warnings.filterwarnings('ignore')
 # -------------------------------------------------------------------
 # 1. CONFIGURATION (Same as original)
 # -------------------------------------------------------------------
-# Make diff vel multipliers and lookbacks for the different opens/times
 PRO_SETUP = {
     "bias_filter": {"enabled": True, "buy_threshold": 0.75, "sell_threshold": 0.25},
     "entry_conditions": {"15min_buffer": 10, "velocity_multiplier": 1.5, "lookback_period": "60min"},
     "risk_management": {
-        "initial_sl": [50, 90], 
+        "initial_sl": [70, 90], 
         "trailing_stages": [
             {"min_profit": 0, "max_profit": 50, "retention": -1},
-            {"min_profit": 50, "max_profit": 100, "retention": 0.7},
-            {"min_profit": 100, "max_profit": 150, "retention": 0.75},
-            {"min_profit": 150, "max_profit": 300, "retention": 0.8},
-            {"min_profit": 300, "max_profit": 400, "retention": 0.85},
-            {"min_profit": 400, "retention": 0.9}
+            {"min_profit": 50, "max_profit": 100, "retention": -1},
+            {"min_profit": 100, "max_profit": 150, "retention": 0.4},
+            {"min_profit": 150, "max_profit": 300, "retention": 0.7},
+            {"min_profit": 300, "max_profit": 400, "retention": 0.8},
+            {"min_profit": 400, "retention": -1}
         ],
         "tp_override": {"fast_threshold": 30, "slow_threshold": 180}
     },
     "session_constraints": {"entry_start": "08:15", "mandatory_close": "17:30"}
 }
-PRO_SETUP = {
-    'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25}, 
-    'entry_conditions': {'15min_buffer': np.int64(10), 'velocity_multiplier': 2.2, 'lookback_period': '60min'}, 
-    'risk_management': {
-        'initial_sl': [np.int64(50), np.int64(50)], 
-        'trailing_stages': [
-            {'min_profit': 0, 'max_profit': np.int64(30), 'retention': -1}, 
-            {'min_profit': np.int64(30), 'max_profit': np.int64(60), 'retention': 0.55}, 
-            {'min_profit': np.int64(60), 'max_profit': np.int64(90), 'retention': 0.6}, 
-            {'min_profit': np.int64(90), 'max_profit': np.int64(120), 'retention': 0.65}, 
-            {'min_profit': np.int64(120), 'max_profit': np.int64(150), 'retention': 0.7}, 
-            {'min_profit': np.int64(150), 'retention': 0.95}
-            ], 
-        'tp_override': {'fast_threshold': np.int64(15), 'slow_threshold': np.int64(120)}}, 
-        'session_constraints': {'entry_start': '10:00', 'mandatory_close': '17:00'}
-        # "session_constraints": {"entry_start": "08:15", "mandatory_close": "17:30"}
-        }
 
-# PRO_SETUP = {
-#     'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25}, 
-#     'entry_conditions': {'15min_buffer': np.int64(5), 'velocity_multiplier': 2.2, 'lookback_period': '60min'}, 
-#     'risk_management': {
-#         'initial_sl': [np.int64(50), np.int64(50)], 
-#         'trailing_stages': [
-#             {'min_profit': 0, 'max_profit': np.int64(30), 'retention': -1}, 
-#             {'min_profit': np.int64(30), 'max_profit': np.int64(60), 'retention': 0.55}, 
-#             {'min_profit': np.int64(60), 'max_profit': np.int64(90), 'retention': 0.6}, 
-#             {'min_profit': np.int64(90), 'max_profit': np.int64(120), 'retention': 0.65}, 
-#             {'min_profit': np.int64(120), 'max_profit': np.int64(150), 'retention': 0.7}, 
-#             {'min_profit': np.int64(150), 'retention': 0.95}
-#             ], 
-#         'tp_override': {'fast_threshold': np.int64(15), 'slow_threshold': np.int64(120)}}, 
-#         'session_constraints': {'entry_start': '10:00', 'mandatory_close': '16:41'}
-#         }
+OP_CONFIG = {'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25}, 
+             'entry_conditions': {
+                 '15min_buffer': 10, 
+                 'velocity_multiplier': 1.5, 
+                 'lookback_period': '60min'
+                 }, 
+             'risk_management': {
+                 'initial_sl': [80, 80], 
+                 'trailing_stages': [
+                     {'min_profit': 0, 'max_profit': np.int64(40), 'retention': -1}, 
+                     {'min_profit': np.int64(40), 'max_profit': np.int64(80), 'retention': 0.86}, 
+                     {'min_profit': np.int64(80), 'max_profit': np.int64(120), 'retention': 0.95}, 
+                     {'min_profit': np.int64(120), 'max_profit': np.int64(160), 'retention': 0.95}, 
+                     {'min_profit': np.int64(160), 'max_profit': np.int64(200), 'retention': 0.95}, 
+                     {'min_profit': np.int64(200), 'retention': 0.95}
+                     ], 
+                     'tp_override': {'fast_threshold': np.int64(56), 'slow_threshold': np.int64(295)}}, 
+             'session_constraints': {'entry_start': '06:30', 'mandatory_close': '17:00'}}
+OP_CONFIG = PRO_SETUP
+# OP_CONFIG = {'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25}, 
+#              'entry_conditions': {
+#                  '15min_buffer': 15, 
+#                  'velocity_multiplier': 1.3385697777045447, 
+#                  'lookback_period': '60min'
+#                  }, 
+#              'risk_management': {
+#                  'initial_sl': [80, 80], 
+#                  'trailing_stages': [
+#                      {'min_profit': 0, 'max_profit': np.int64(40), 'retention': -1}, 
+#                      {'min_profit': np.int64(40), 'max_profit': np.int64(80), 'retention': 0.86}, 
+#                      {'min_profit': np.int64(80), 'max_profit': np.int64(120), 'retention': 0.95}, 
+#                      {'min_profit': np.int64(120), 'max_profit': np.int64(160), 'retention': 0.95}, 
+#                      {'min_profit': np.int64(160), 'max_profit': np.int64(200), 'retention': 0.95}, 
+#                      {'min_profit': np.int64(200), 'retention': 0.95}
+#                      ], 
+#                      'tp_override': {'fast_threshold': np.int64(56), 'slow_threshold': np.int64(295)}}, 
+#              'session_constraints': {'entry_start': '06:43', 'mandatory_close': '16:29'}}
 
 CET = pytz.timezone('Europe/Berlin')
 UTC = pytz.utc
@@ -112,108 +114,213 @@ def get_server_timezone(year=None, month=None, day=None):
 # -------------------------------------------------------------------
 # 2. VECTORIZED SIGNAL ENGINE
 # -------------------------------------------------------------------
+def plot_bias_comparison(calc_biases, real_biases):
+    # Convert dictionaries to a single DataFrame for easy plotting
+    print(calc_biases)
+    print(real_biases)
+    df_compare = pd.DataFrame({
+        'Calculated': pd.Series(calc_biases),
+        'Real': pd.Series(real_biases)
+    }).dropna()
+
+    # Map categories to numbers for the Y-axis
+    mapping = {"buy": 1, "straddle": 0, "sell": -1}
+    df_compare['calc_num'] = df_compare['Calculated'].map(mapping)
+    df_compare['real_num'] = df_compare['Real'].map(mapping)
+
+    plt.figure(figsize=(12, 6))
+    
+    # Plot Real Bias as a background step line
+    plt.step(df_compare.index, df_compare['real_num'], where='post', 
+             label='Real Daily Bias', alpha=0.3, color='gray', linestyle='--')
+    
+    # Plot Calculated Bias as points
+    # Green for correct buy, Red for correct sell, Blue for others
+    correct = df_compare['Calculated'] == df_compare['Real']
+    plt.scatter(df_compare.index[correct], df_compare['calc_num'][correct], 
+                color='green', label='Correct Prediction', zorder=5)
+    plt.scatter(df_compare.index[~correct], df_compare['calc_num'][~correct], 
+                color='red', label='Incorrect Prediction', zorder=5)
+
+    plt.yticks([-1, 0, 1], ['Sell', 'Straddle', 'Buy'])
+    plt.title("Calculated Bias vs. Real Market Direction")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+    
+    # Calculate accuracy
+    accuracy = (df_compare['Calculated'] == df_compare['Real']).mean() * 100
+    print(f"Bias Prediction Accuracy: {accuracy:.2f}%")
 
 class SignalPrecomputer:
-    """Computes all technical signals in bulk to avoid O(N^2) complexity."""
-    
     @staticmethod
     def compute_velocity(df, multiplier, lookback):
-        # Resample to 1S, calculate rolling density
+        """
+        Optimized for 8GB RAM: Resampling can be heavy. 
+        We use 'limit' to prevent memory bloat during reindexing.
+        """
+        # Calculate tick density per second
         counts = df.resample('1S').size()
-        density = counts.rolling('30S', min_periods=1).sum() / 30
-        rolling_avg = density.rolling(lookback, min_periods=1).mean()
-        signal = density > (rolling_avg * multiplier)
-        # Reindex back to tick level
-        return signal.reindex(df.index, method='ffill').fillna(False).values
+        density = counts.rolling(window=30, min_periods=1).mean() # 30s density
+        
+        rolling_avg = density.rolling(window=lookback, min_periods=1).mean()
+        signal_s = density > (rolling_avg * multiplier)
+        
+        # Reindex back to tick level efficiently
+        return signal_s.reindex(df.index, method='ffill').fillna(False).values
 
     @staticmethod
-    def get_daily_bias(df, buy_t, sell_t):
-        mid = (df['bid'] + df['ask']) / 2
-        # Group by CET Date
-        days = mid.groupby(mid.index.tz_convert(CET).date)
+    def get_market_levels(df):
+        """
+        Extracts PDH, PDL, and Asian Range (00:00-08:00 CET).
+        Essential for GER40 'Judas Swing' detection.
+        """
+        # Ensure index is CET for session logic
+        # print("="*80)
+        # print("LEVELS")
+        # print("="*80)
+        df_cet = df.copy()
+        if df_cet.index.tz is None:
+            df_cet.index = df_cet.index.tz_localize('UTC').tz_convert('CET')
         
-        def calc_rc(x):
+        # 1. Previous Day High/Low
+        daily = df_cet['bid'].resample('D').agg(['max', 'min'])
+        levels = daily.shift(1) # We need yesterday's levels for today
+        levels.columns = ['pdh', 'pdl']
+        levels.index = levels.index.date
+        # print(f"{levels=}")
+
+        # 2. Asian Range (00:00 - 08:00 CET)
+        asian_data = df_cet.between_time("00:00", "08:00")
+        asian_range = asian_data['bid'].groupby(asian_data.index.date).agg(['max', 'min'])
+        asian_range.columns = ['asian_h', 'asian_l']
+        # print(f"{asian_range=}")
+        
+        # Combine levels
+        combined = pd.concat([levels, asian_range], axis=1)
+        # combined.index = pd.to_datetime(combined.index).date
+        filled = combined.ffill().bfill()
+        return filled.to_dict('index')
+    
+    @staticmethod
+    def get_biases(df, buy_t, sell_t, shift=True):
+        """
+        Enhanced Bias: Combines Relative Close (RC) with 
+        Previous Day Range position.
+        """
+        mid = (df['bid'] + df['ask']) / 2
+        days = mid.groupby(mid.index.date)
+        
+        def calc_advanced_bias(x):
             h, l, c = x.max(), x.min(), x.iloc[-1]
-            return (c - l) / (h - l) if not h == l else 0.5
+            if h == l: return 0.5
             
-        rc = days.apply(calc_rc)
-        # 4. Vectorised Bias Mapping (2026 Standard)
+            # Relative Close (Your original logic)
+            rc = (c - l) / (h - l)
+            
+            # Mechanical Rule: If we close in the top 25%, bias is Bullish
+            if rc >= buy_t: return 1  # Buy
+            if rc <= sell_t: return -1 # Sell
+            return 0 # Straddle
+
+        daily_val = days.apply(calc_advanced_bias)
+        
+        # Shift to apply yesterday's result to today's trading
+        if shift:
+            daily_val = daily_val.shift(1).fillna(0)
+        return daily_val
+    
+    def get_real_bias(df):
+        # Resample to daily OHLC
+        daily = df['bid'].resample('D').ohlc().dropna()
+        daily.index = daily.index.date
+        
+        # Real bias: Bullish if Close > Open, Bearish if Close < Open
         conditions = [
-            (rc >= buy_t),
-            (rc <= sell_t)
+            (daily['close'] > daily['open']),
+            (daily['close'] < daily['open'])
         ]
         choices = ["buy", "sell"]
         
-        # default="straddle" handles the 'else' case
-        biases = pd.Series(np.select(conditions, choices, default="straddle"), index=rc.index)
-        biases = biases.shift(1, fill_value="straddle")
+        daily['real_bias'] = np.select(conditions, choices, default="straddle")
+        return daily['real_bias'].to_dict()
+
+    @staticmethod
+    def get_daily_bias(df, buy_t, sell_t):
         
-        return biases.to_dict()
+        """
+        Enhanced Bias: Combines Relative Close (RC) with 
+        Previous Day Range position.
+        """
+        mid = (df['bid'] + df['ask']) / 2
+        days = mid.groupby(mid.index.date)
+        
+        def calc_advanced_bias(x):
+            o, h, l, c = x.iloc[0], x.max(), x.min(), x.iloc[-1] # (10 1) (2,4), (9,7)
+            if h == l: return 0.5
+            
+            # Relative Close (Your original logic)
+            rc = (c - l) / (h - l)
+            
+            # Mechanical Rule: If we close in the top 25%, bias is Bullish
+            if rc >= buy_t: return 1  # Buy
+            if rc <= sell_t: return -1 # Sell
+            return 0 # Straddle
+
+        daily_val = days.apply(calc_advanced_bias)
+        
+        # Shift to apply yesterday's result to today's trading
+        bias_map = daily_val.shift(1).fillna(0)
+        mapping = {1: "buy", -1: "sell", 0: "straddle"}
+        return {k: mapping[v] for k, v in bias_map.items()}
 
     @staticmethod
     def get_ghost_ranges(df):
+        # 08:00-08:15 is the Frankfurt Pre-Market 'Ghost' range
         df_cet = df.copy()
-        df_cet.index = df_cet.index.tz_convert(CET)
+        if df_cet.index.tz is None:
+            df_cet.index = df_cet.index.tz_localize('UTC').tz_convert('CET')
+            
         ghost_data = df_cet.between_time("08:00", "08:15")
         mid = (ghost_data['bid'] + ghost_data['ask']) / 2
-        ranges = mid.groupby(mid.index.date).agg(['min', 'max'])
-        return ranges.to_dict('index')
+        return mid.groupby(mid.index.date).agg(['min', 'max']).to_dict('index')
 
 # -------------------------------------------------------------------
 # 3. HIGH-SPEED ENGINE (NUMPY CORE)
 # -------------------------------------------------------------------
-def is_safe_dax_trading_period(df_index):
+def determine_execution_bias(bid, time_cet, levels, daily_rc_bias):
     """
-    Checks if a given timestamp falls within the refined 'safe' DAX trading windows.
-
-    Safe periods: 
-    1. Morning session after open noise (09:30 - 11:30 CET)
-    2. Afternoon session before market close noise (14:00 - 17:20 CET)
+    Refines the Daily RC bias with real-time Liquidity Sweeps.
+    levels: dict containing 'asian_h', 'asian_l', 'pdh', 'pdl'
+    daily_rc_bias: 'buy', 'sell', or 'straddle' from your previous method
     """
+    price = bid #current_tick['bid']
+    # time_cet = current_tick['time_cet'] # Assuming you've handled the TZ
     
-    # Ensure the index is localized before extracting H/M properties
-    if df_index.tz is None:
-        raise ValueError("DataFrame index must be timezone-aware (e.g., 'Europe/Berlin') before applying this filter.")
-        
-    # df_index = df_index.tz_convert(CET)
-    h = df_index.hour
-    m = df_index.minute
+    # 1. Initialize with your pre-computed Daily RC bias
+    if daily_rc_bias == "sell":
+        refined_bias = "buy"
+    elif daily_rc_bias == "buy":
+        refined_bias = "sell"
     
-    # Combine hour and minute into a single integer for easy comparison (e.g., 930 for 09:30)
-    time_val = h * 100 + m
+    # 2. Check for Judas Swing (08:00 - 09:30 CET)
+    # This is the 'Manipulation' phase of the GER40
+    is_london_open = "08:00" <= time_cet.strftime("%H:%M") <= "09:30"
     
-    # --- Suggestion 1 & 2: Avoid Open/Close Noise & Lunch Lull ---
-    
-    # Define the two safe windows
-    morning_session = (time_val >= 930) & (time_val <= 1130)
-    afternoon_session = (time_val >= 1400) & (time_val <= 1720) # Ends before the 17:30 auction
+    if is_london_open:
+        # print("ASIAN")
+        # print(levels)
+        # Manipulation Move: Sweep High, then break lower = Bearish Bias
+        if price > levels['asian_h']:
+            # We are sweeping liquidity above the Asian Range
+            # If your RC bias was 'buy', this is a warning (Potential Fakeout)
+            refined_bias = "potential_sell_sweep" 
+            
+        elif price < levels['asian_l']:
+            # We are sweeping liquidity below the Asian Range
+            refined_bias = "potential_buy_sweep"
 
-    # --- Suggestion 3: US Open Handover (We add a 'pause' around 15:30 CET) ---
-    # The market is safest *before* the US opens, then consolidates the move afterward.
-    # The afternoon session (14:00-17:20) already covers this, so we combine the checks.
-
-    is_safe = morning_session | afternoon_session
-    
-    # Returns a boolean Series you can use as a mask
-    return is_safe
-
-def get_todays_open_price(df, index):
-    """
-    Returns the price at the 09:00 Frankfurt Open for each day.
-    """
-    mid_cet = (df['bid'] + df['ask']) / 2
-    
-    # 1. Ensure we are in Frankfurt time
-    mid_cet.index = index # = mid.dt.tz_convert('Europe/Berlin')
-    
-    # 2. Filter for everything from 09:00 onwards
-    post_open = mid_cet[mid_cet.index.time >= DT.time(9, 0)]
-    
-    # 3. Group by date and take the first value (the 09:00 price)
-    daily_opens = post_open.groupby(post_open.index.date).first()
-    
-    # Return as a dictionary mapping {date: open_price}
-    return daily_opens.to_dict()
+    return refined_bias
 
 def process_chunk_parallel(year, month, config):
     """
@@ -225,15 +332,14 @@ def process_chunk_parallel(year, month, config):
         print(f"File not found: {path}")
         return []
     
-    server_df = pd.read_parquet(path)
+    df = pd.read_parquet(path)
     zone = get_server_timezone(year, month, 1)
     # print(f"Server timezone: {zone}")
-    server_df.index = pd.to_datetime(server_df.index).tz_localize(zone)
-    server_df['is_safe_window'] = is_safe_dax_trading_period(server_df.index)
-    df = server_df#[server_df['is_safe_window'] == True]
+    df.index = pd.to_datetime(df.index).tz_localize(zone)
     
     # 1. Precompute Signals (Vectorized)
     biases = SignalPrecomputer.get_daily_bias(df, config['bias_filter']['buy_threshold'], config['bias_filter']['sell_threshold'])
+    levels = SignalPrecomputer.get_market_levels(df)
     ghost_ranges = SignalPrecomputer.get_ghost_ranges(df)
     velocity_signals = SignalPrecomputer.compute_velocity(
         df, config['entry_conditions']['velocity_multiplier'], config['entry_conditions']['lookback_period']
@@ -251,7 +357,6 @@ def process_chunk_parallel(year, month, config):
     hours = df_cet_idx.hour
     minutes = df_cet_idx.minute
     dates = df_cet_idx.date
-    daily_opens = get_todays_open_price(df, df_cet_idx)
     
     trades = []
     in_trade = False
@@ -274,7 +379,6 @@ def process_chunk_parallel(year, month, config):
     end_h, end_m = [int(t) for t in end.split(":")]
     
     
-    
     for i in range(len(mids)):
         curr_date = dates[i]
         curr_time = times[i]
@@ -286,19 +390,31 @@ def process_chunk_parallel(year, month, config):
         if curr_date == day_traded:
             continue
             
+
+        # Get pre-computed levels for today
+        current_levels = levels.get(curr_date)
+        # print(levels)
+        # print(f"Today = {curr_date}")
+        # print(current_levels)
+        # raise ValueError()
+        rc_bias = biases.get(curr_date, "straddle")
+        
         
 
         # Session Constraints
         h, m = hours[i], minutes[i]
-        # is_entry_window = (h == 8 and m >= 15) or (8 < h < 17) or (h == 17 and m < 30)
-        # is_close_time = (h == 17 and m >= 30)
-        # is_spread_wide = (h == 8 and m < 5) or (h == 17 and m > 25)
-        is_entry_window = (h == start_h and m >= start_m) or (start_h < h < end_h) or (h == end_h and m < end_m)
-        is_close_time = (h == end_h and m >= end_m)
+        is_entry_window = (h == 8 and m >= 15) or (8 < h < 17) or (h == 17 and m < 30)
+        is_close_time = (h == 17 and m >= 30)
         is_spread_wide = (h == 8 and m < 5) or (h == 17 and m > 25)
+        # is_entry_window = (h == start_h and m >= start_m) or (start_h < h < end_h) or (h == end_h and m < end_m)
+        # is_close_time = (h == end_h and m >= end_m)
+        # is_spread_wide = (h == 8 and m < 5) or (h == 17 and m > 25)
         
         bias_str = biases.get(curr_date, 'straddle')
         if bias_str == 'straddle': continue
+        # Update bias based on session price action
+        active_bias = determine_execution_bias(curr_bid, df_cet_idx[i], current_levels, rc_bias)
+        # bias_str = active_bias
         
         ghost = ghost_ranges.get(curr_date)
         if not ghost: continue
@@ -357,14 +473,14 @@ def process_chunk_parallel(year, month, config):
             if bias_str == 'buy':
                 if curr_ask <= g_low + buffer: touched_opposite = True
                 
-                if touched_opposite and curr_ask >= g_high - buffer and velocity_signals[i] and curr_ask > daily_opens[curr_date]:
+                if touched_opposite and curr_ask >= g_high - buffer and velocity_signals[i]:
                     in_trade, direction, entry_p, entry_t, max_pnl = True, 'buy', curr_bid, curr_time, 0.0
                     # print("Entered buy")
                     # print(df.iloc[[i]])
             elif bias_str == 'sell':
                 if curr_bid >= g_high - buffer: touched_opposite = True
                 
-                if touched_opposite and curr_bid <= g_low + buffer and velocity_signals[i] and curr_bid < daily_opens[curr_date]:
+                if touched_opposite and curr_bid <= g_low + buffer and velocity_signals[i]:
                     in_trade, direction, entry_p, entry_t, max_pnl = True, 'sell', curr_ask, curr_time, 0.0
                     # print("Entered sell")
                     # print(df.iloc[[i]])
@@ -372,7 +488,7 @@ def process_chunk_parallel(year, month, config):
     return trades
     
 def get_lot(equity):
-    lot_size = 0.01
+    lot_size= 0.01
     lot_maps = {
         0: 0.04, # 1.4
         15: 0.05, # 2.8
@@ -400,6 +516,13 @@ def calculate_equity(trades):
     # 1. Create columns if they don't exist
     trades['pnl'] = 0.0
     trades['equity'] = 0.0
+
+    # First row with 0 equity
+    new_row = trades.iloc[[0]].copy()
+    new_row.at[new_row.index[0], 'profit_ticks'] = 0.0
+    # new_row.index = [new_row.index[0] - pd.Timedelta(hours=1)]
+    trades = pd.concat([new_row, trades], ignore_index=True)
+
     
     # 2. Sequential calculation (Equity affects Lot Size)
     for index, row in trades.iterrows():
@@ -416,6 +539,9 @@ def calculate_equity(trades):
         # Write back to DataFrame using .at for speed
         trades.at[index, 'pnl'] = trade_pnl
         trades.at[index, 'equity'] = current_equity
+    
+    
+    # trades = pd.concat([t1, trades[:1], trades[1:]])
         
     return trades
 
@@ -474,33 +600,53 @@ def plot_results(trades):
     plt.grid(True, alpha=0.3)
     plt.show()
 
-# if __name__ == "__main__":
-#     engine = DAXTickEngine(PRO_SETUP)
-#     # Example: Run for 2025
-#     results = engine.run_backtest(2025, 1, 2026, 1)
+def optimize_trails():
+    profits = range(100, 101, 50)
+    rs = range(1, 10)
+    retentions = [{"min_profit": p, "retention": r/10} for p in profits for r in rs]
+    optimization_results = {}
+
+    for retention in retentions:
+        ret = [{"min_profit": 0, "max_profit": retention["min_profit"], "retention": -1}] + [retention]
+        PRO_SETUP['risk_management']['trailing_stages'] = ret
+
+        engine = DAXTickEngine(PRO_SETUP)
+        results = engine.run_backtest(2025, 1, 2025, 3)
+        results = calculate_equity(results)
+        print(ret)
+        print(f"Total Profit: $ {results['pnl'].sum():.2f}")
+        optimization_results[retention["retention"]] = results['pnl'].sum()
     
-#     if not results.empty:
-#         results = calculate_equity(results)
-#         # results['server_entry_time'] = results['entry_time'].dt.tz_convert(get_server_timezone())
-#         # results['server_exit_time'] = results['exit_time'].dt.tz_convert(get_server_timezone())
-#         entry_time = pd.to_datetime(results['entry_time']).dt.tz_localize(get_server_timezone())
-#         results['server_entry_time'] = entry_time.dt.tz_convert(CET)
-#         results.to_csv("DAX_test.csv")
-#         win_rate = (results['profit_ticks'] > 0).mean() * 100
+    print(optimization_results)
 
-#         print(f"Backtest Complete.")
-#         print(f"Total Trades: {len(results)}")
-#         print(f"Win Rate: {win_rate:.2f}%")
-#         print(f"Total Profit: $ {results['pnl'].sum():.2f}")
-#         print(f"Min profit: $ {results['pnl'].min()}")
-#         print(f"Max profit: $ {results['pnl'].max()}")
-#         print(f"Avg profit: $ {results['pnl'].mean()}")
+
+# if __name__ == "__main__":
+    # engine = DAXTickEngine(PRO_SETUP)
+    # # Example: Run for 2025
+    # results = engine.run_backtest(2025, 1, 2026, 1)
+    
+    # if not results.empty:
+    #     results = calculate_equity(results)
+    #     # results['server_entry_time'] = results['entry_time'].dt.tz_convert(get_server_timezone())
+    #     # results['server_exit_time'] = results['exit_time'].dt.tz_convert(get_server_timezone())
+    #     entry_time = pd.to_datetime(results['entry_time']).dt.tz_localize(get_server_timezone())
+    #     results['server_entry_time'] = entry_time.dt.tz_convert(CET)
+    #     results.to_csv("DAX_test.csv")
+    #     win_rate = (results['profit_ticks'] > 0).mean() * 100
+
+    #     print(f"Backtest Complete.")
+    #     print(f"Total Trades: {len(results)}")
+    #     print(f"Win Rate: {win_rate:.2f}%")
+    #     print(f"Total Profit: $ {results['pnl'].sum():.2f}")
+    #     print(f"Min profit: $ {results['pnl'].min()}")
+    #     print(f"Max profit: $ {results['pnl'].max()}")
+    #     print(f"Avg profit: $ {results['pnl'].mean()}")
         
-#         plot_results(results)
-#     else:
-#         print("No results")
-#     # input()
-
+    #     plot_results(results)
+    # else:
+    #     print("No results")
+    
+    # optimize_trails()
 
 from skopt import gp_minimize
 from skopt.space import Integer, Real
@@ -644,9 +790,9 @@ if __name__ == "__main__":
         plot_trailing_logic(best_params)
         # Update your PRO_SETUP with best_params here if you want to run a final test
     else:
-        engine = DAXTickEngine(PRO_SETUP)
+        engine = DAXTickEngine(OP_CONFIG)
         # Example: Run for 2025
-        results = engine.run_backtest(2025, 1, 2026, 1)
+        results = engine.run_backtest(2025, 1, 2025, 6)
         
         if not results.empty:
             results = calculate_equity(results)
@@ -668,26 +814,3 @@ if __name__ == "__main__":
             plot_results(results)
         else:
             print("No results")
-
-
-
-
-"""
-1. The Importance of "Pre-Market Gaps" and The Open
-The GER40 frequently experiences significant gaps between the previous day's close (5:30 PM CET) and the main open the next morning (9:00 AM CET).
-The Guarded Truth: The market often spends the first 30-90 minutes of the main session "filling the gap" or consolidating the previous night's price action from U.S. and Asian markets. Many institutional traders watch how the index reacts around the previous day's closing price level. The initial market reaction (the first 15-30 mins) can often set the tone for the rest of the day.
-2. The Power of "Opening Range Breakouts" (ORB)
-The Guarded Truth: The index often trends strongly in the direction of the initial move after the market settles down following the initial "noise" of the open. A simple, effective strategy many use is defining the high and low of the first 30 or 60 minutes and only trading the breakout of that range, using the other side of the range as the stop loss. The volatility of the GER40 makes this pattern highly reliable on trend days.
-3. Understanding the "Total Return" Bias
-As mentioned, the GER40 is a performance index.
-The Guarded Truth: This structural difference means that, over time, the index naturally trends slightly higher than a standard "price index" would. While this doesn't help with 15-minute chart scalping, it provides a subtle, long-term bullish bias that buy-side institutional traders are always aware of when structuring longer-term hedges or investments. The "default" trade, absent major news, is often gently long.
-4. The "Pivot Time" of 3:30 PM CET
-The U.S. markets (NYSE/Nasdaq) open at 3:30 PM CET.
-The Guarded Truth: This time often acts as a pivot point for the GER40. The index frequently pauses, reverses, or accelerates significantly at this exact time as a massive wave of U.S. volume hits the global markets. Many experienced traders avoid taking a new position immediately before 3:30 PM CET, preferring to wait until after the initial U.S. open volatility subsides.
-5. Managing Psychological "Drawdown Drag"
-The Guarded Truth: The GER40's speed means losses can accumulate quickly. Experienced traders know that the hardest part isn't managing a single loss, but managing the psychology after several small losses in a row (a "drawdown"). The "closely guarded truth" here is the vital importance of reducing your position size immediately after a series of losses to regain confidence and control, rather than trying to "win back" the money with larger bets.
-
-"""
-
-"""You want to compare the current price (or the price during your "safe" window) to an early reference point, like the opening range high/low or the Central Pivot Range (CPR).
-"""
