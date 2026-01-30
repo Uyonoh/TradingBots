@@ -35,7 +35,7 @@ PRO_SETUP = {
 }
 PRO_SETUP = {
     'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25}, 
-    'entry_conditions': {'15min_buffer': np.int64(10), 'velocity_multiplier': 2.2, 'lookback_period': '60min'}, 
+    'entry_conditions': {'15min_buffer': np.int64(10), 'velocity_multiplier': 2.2, 'lookback_period': '3600S'}, 
     'risk_management': {
         'initial_sl': [np.int64(50), np.int64(50)], 
         'trailing_stages': [
@@ -162,40 +162,6 @@ class SignalPrecomputer:
 # -------------------------------------------------------------------
 # 3. HIGH-SPEED ENGINE (NUMPY CORE)
 # -------------------------------------------------------------------
-def is_safe_dax_trading_period(df_index):
-    """
-    Checks if a given timestamp falls within the refined 'safe' DAX trading windows.
-
-    Safe periods: 
-    1. Morning session after open noise (09:30 - 11:30 CET)
-    2. Afternoon session before market close noise (14:00 - 17:20 CET)
-    """
-    
-    # Ensure the index is localized before extracting H/M properties
-    if df_index.tz is None:
-        raise ValueError("DataFrame index must be timezone-aware (e.g., 'Europe/Berlin') before applying this filter.")
-        
-    # df_index = df_index.tz_convert(CET)
-    h = df_index.hour
-    m = df_index.minute
-    
-    # Combine hour and minute into a single integer for easy comparison (e.g., 930 for 09:30)
-    time_val = h * 100 + m
-    
-    # --- Suggestion 1 & 2: Avoid Open/Close Noise & Lunch Lull ---
-    
-    # Define the two safe windows
-    morning_session = (time_val >= 930) & (time_val <= 1130)
-    afternoon_session = (time_val >= 1400) & (time_val <= 1720) # Ends before the 17:30 auction
-
-    # --- Suggestion 3: US Open Handover (We add a 'pause' around 15:30 CET) ---
-    # The market is safest *before* the US opens, then consolidates the move afterward.
-    # The afternoon session (14:00-17:20) already covers this, so we combine the checks.
-
-    is_safe = morning_session | afternoon_session
-    
-    # Returns a boolean Series you can use as a mask
-    return is_safe
 
 def get_todays_open_price(df, index):
     """
@@ -225,12 +191,10 @@ def process_chunk_parallel(year, month, config):
         print(f"File not found: {path}")
         return []
     
-    server_df = pd.read_parquet(path)
+    df = pd.read_parquet(path)
     zone = get_server_timezone(year, month, 1)
     # print(f"Server timezone: {zone}")
-    server_df.index = pd.to_datetime(server_df.index).tz_localize(zone)
-    server_df['is_safe_window'] = is_safe_dax_trading_period(server_df.index)
-    df = server_df#[server_df['is_safe_window'] == True]
+    df.index = pd.to_datetime(df.index).tz_localize(zone)
     
     # 1. Precompute Signals (Vectorized)
     biases = SignalPrecomputer.get_daily_bias(df, config['bias_filter']['buy_threshold'], config['bias_filter']['sell_threshold'])
@@ -290,9 +254,6 @@ def process_chunk_parallel(year, month, config):
 
         # Session Constraints
         h, m = hours[i], minutes[i]
-        # is_entry_window = (h == 8 and m >= 15) or (8 < h < 17) or (h == 17 and m < 30)
-        # is_close_time = (h == 17 and m >= 30)
-        # is_spread_wide = (h == 8 and m < 5) or (h == 17 and m > 25)
         is_entry_window = (h == start_h and m >= start_m) or (start_h < h < end_h) or (h == end_h and m < end_m)
         is_close_time = (h == end_h and m >= end_m)
         is_spread_wide = (h == 8 and m < 5) or (h == 17 and m > 25)
