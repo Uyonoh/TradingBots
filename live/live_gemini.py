@@ -5,11 +5,20 @@ import pytz
 from datetime import datetime, timedelta, time
 import time as t_mod
 from collections import deque
+import os
+import dotenv
+dotenv.load_dotenv()
+
+# Error: Check direction during high velocity, might be opposing
 
 # -------------------------------------------------------------------
 # CONFIGURATION
 # -------------------------------------------------------------------
-SYMBOL = "GER40"  # Update for your broker (e.g., DE40, DAX40)
+LOGIN = int(os.environ["ACCOUNT_ID"])
+PASSWORD = os.environ["PASSWORD"]
+SERVER = os.environ["SERVER"]
+
+SYMBOL = "#BTCUSD"  # Update for your broker (e.g., DE40, DAX40)
 VOLUME = 0.01      # Lot size
 DEVIATION = 10    # Slippage tolerance in points
 MAGIC_NUM = 123456
@@ -18,21 +27,24 @@ MAGIC_NUM = 123456
 CONFIG = {
     'bias_filter': {'buy_threshold': 0.75, 'sell_threshold': 0.25},
     'entry_conditions': {
-        'velocity_multiplier': 2.2,
+        'velocity_multiplier': 1.8,
         'lookback_period': 60 * 60,  # In seconds (approx matching rolling window)
-        '15min_buffer': 5.0     # Points buffer for ghost range
+        '15min_buffer': 10.0     # Points buffer for ghost range
     },
     'risk_management': {
         'initial_sl': 50.0,     # Points
         'trailing_stages': [
-            {'min_profit': 15.0, 'retention': 0.5},
-            {'min_profit': 30.0, 'retention': 0.8},
-            {'min_profit': 50.0, 'retention': -1} # -1 means Break Even + tiny profit
-        ]
+            {'min_profit': 0, 'max_profit': np.int64(30), 'retention': -1}, 
+            {'min_profit': np.int64(30), 'max_profit': np.int64(60), 'retention': 0.55}, 
+            {'min_profit': np.int64(60), 'max_profit': np.int64(90), 'retention': 0.6}, 
+            {'min_profit': np.int64(90), 'max_profit': np.int64(120), 'retention': 0.65}, 
+            {'min_profit': np.int64(120), 'max_profit': np.int64(150), 'retention': 0.7}, 
+            {'min_profit': np.int64(150), 'retention': 0.95}
+            ],
     },
     'session': {
-        'start_hour': 10, 'start_minute': 0, # Entry Window Start
-        'end_hour': 17, 'end_minute': 0,   # Mandatory Close
+        'start_hour': 5, 'start_minute': 0, # Entry Window Start
+        'end_hour': 23, 'end_minute': 30,   # Mandatory Close
         'ghost_start': time(8, 0),
         'ghost_end': time(8, 15)
     }
@@ -41,6 +53,8 @@ CONFIG = {
 # Timezones
 CET = pytz.timezone('Europe/Berlin')
 UTC = pytz.utc
+UTC2 = pytz.timezone('Europe/Athens') # EET / CAT
+UTC3 = pytz.timezone('Asia/Baghdad') # EAT / MST
 
 # -------------------------------------------------------------------
 # HELPER CLASSES
@@ -56,10 +70,37 @@ class VelocityMonitor:
         self.density_history = deque(maxlen=lookback_seconds)
         self.last_update = t_mod.time()
 
+    def get_server_timestamp(self):
+        utc_now = datetime.now(UTC)
+        # Error: remove hardcodded hours, should be dynamic
+        server_diff = timedelta(hours=2) # UTC+2
+        server_time = utc_now + server_diff
+
+        return server_time.timestamp()
+
+    def get_ticks(self, server_time=None):
+        if server_time is None:
+            server_time = self.get_server_timestamp()
+
+        ticks = mt5.copy_ticks_from(SYMBOL, server_time, 10000, mt5.COPY_TICKS_ALL)
+        return ticks
+    
+    def get_tick_timestamps(self, server_time=None):
+        ticks = self.get_ticks(server_time)
+        timestamps = [int(t["time_msc"])/1000 for t in ticks]
+
+        return timestamps
+
+
     def on_tick(self):
-        now = t_mod.time()
-        # Error: Should append ticks or tick counts not time
-        self.tick_timestamps.append(now)
+        now = self.get_server_timestamp()
+        if len(self.tick_timestamps) == 0:
+            timestamps = self.get_tick_timestamps()
+        else:
+            last_timestamp = self.tick_timestamps[-1]
+            timestamps = self.get_tick_timestamps(last_timestamp + 0.001)
+
+        self.tick_timestamps.extend(timestamps)
         self.cleanup(now)
 
     def cleanup(self, now):
@@ -69,7 +110,7 @@ class VelocityMonitor:
 
     def update_history(self):
         # Called once per second to record density for the Moving Average
-        now = t_mod.time()
+        now = self.get_server_timestamp()
         self.cleanup(now)
         current_density = len(self.tick_timestamps) / 30.0
         self.density_history.append(current_density)
@@ -115,13 +156,21 @@ class StrategyState:
 # -------------------------------------------------------------------
 # Error: incorrect implementation, should use UTC2/3 for server
 # Might not need server time? Trade CET
+def get_server_time():
+        utc_now = datetime.now(UTC)
+        # Error: remove hardcodded hours, should be dynamic
+        server_diff = timedelta(hours=2) # UTC+2
+        server_time = utc_now + server_diff
+
+        return server_time
+
 def get_server_time_cet():
     """Gets MT5 server time and converts to CET."""
     # Note: MT5 Usually returns time in Broker Time. 
     # We assume Broker Time is aligned with EU markets or we convert.
     # For safety, we trust the broker's current time struct.
-    utc_now = datetime.now(UTC)
-    return utc_now.astimezone(CET)
+    server_time = get_server_time()
+    return server_time.astimezone(CET)
 
 def calculate_daily_bias():
     """
@@ -234,8 +283,15 @@ def modify_sl(ticket, new_sl):
 
 def main():
     if not mt5.initialize():
-        print("MT5 Init Failed")
-        return
+        err = mt5.last_error()
+        print(f"MT5 terminal initialization failed: {err}")
+        raise ConnectionError(f"Could not connect to MT5 terminal: {err}")
+    
+    if not mt5.login(login=LOGIN, password=PASSWORD, server=SERVER):
+        err = mt5.last_error()
+        print(f"Login failed for account {LOGIN}: {err}")
+        mt5.shutdown()
+        raise PermissionError(f"MT5 login failed: {err}")
 
     # Check Symbol
     if not mt5.symbol_select(SYMBOL, True):
@@ -247,15 +303,16 @@ def main():
     
     print(f"Live Trading Started on {SYMBOL}...")
     
-    last_second_tick = t_mod.time()
+    last_update_seconds = t_mod.time()
 
     while True:
         # 1. Hardware Efficiency: Sleep to reduce CPU usage
         t_mod.sleep(0.1) 
         
         # 2. Update Time
+        now = get_server_time()
         now_cet = get_server_time_cet()
-        today_date = now_cet.date()
+        today_date = now.date()
         
         # 3. New Day Logic
         if state.current_date != today_date:
@@ -268,11 +325,15 @@ def main():
         if tick is None: continue
         
         velocity.on_tick()
+        # print(f"30S tikcs: {len(velocity.tick_timestamps)}")
         
         # Update Velocity History every 1 second
-        if t_mod.time() - last_second_tick >= 1.0:
+        if t_mod.time() - last_update_seconds >= 1.0:
             velocity.update_history()
-            last_second_tick = t_mod.time()
+            last_update_seconds = t_mod.time()
+
+            if (datetime.now().time().minute % 5 == 0) and (datetime.now().time().second == 0):
+                print(f"Tick velosity density at {datetime.now().time()}: {velocity.density_history[-1]}")
 
         # 5. Logic Gates
         
@@ -294,6 +355,7 @@ def main():
             # If it is 09:00 or later
             target_open = time(CONFIG['session']['start_hour'], 0)
             if now_cet.time() >= target_open:
+                # Error: might need to use assk/bid based on sell/buy
                 state.daily_open_price = tick.ask # Approximate open with current Ask
                 print(f"Market Open Price Recorded: {state.daily_open_price}")
 
@@ -311,6 +373,7 @@ def main():
             # Mandatory Close (Time)
             close_time = time(CONFIG['session']['end_hour'], CONFIG['session']['end_minute'])
             if now_cet.time() >= close_time:
+                print("CLosing all Positions")
                 close_position()
                 state.in_trade = False
                 continue
@@ -319,7 +382,7 @@ def main():
             current_profit_points = (tick.bid - pos.price_open) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - tick.ask)
             # Adjust for point value
             point = mt5.symbol_info(SYMBOL).point
-            current_profit_points /= point
+            current_profit_points /= point #in pips
             
             state.max_pnl = max(state.max_pnl, current_profit_points)
             
@@ -337,7 +400,9 @@ def main():
                 if best_retention == -1:
                     # Error: should set to original sl
                      # Break even + 1 point
-                    new_sl = pos.price_open + (1.0 * point) if pos.type == mt5.ORDER_TYPE_BUY else pos.price_open - (1.0 * point)
+                    # sl = CONFIG['risk_management']['initial_sl']
+                    # new_sl = pos.price_open + (1.0 * point) if pos.type == mt5.ORDER_TYPE_BUY else pos.price_open - (1.0 * point)
+                    pass
                 else:
                     trail_dist = state.max_pnl * best_retention * point
                     new_sl = (tick.bid - trail_dist) if pos.type == mt5.ORDER_TYPE_BUY else (tick.ask + trail_dist)
@@ -348,6 +413,7 @@ def main():
                 if pos.type == mt5.ORDER_TYPE_SELL and (pos.sl == 0 or new_sl < pos.sl): should_mod = True
                 
                 if should_mod:
+                    print("Modified SL")
                     modify_sl(pos.ticket, new_sl)
 
         # -----------------------------------------------------------
@@ -379,6 +445,8 @@ def main():
                             if tick.ask > state.daily_open_price:
                                 # High Velocity
                                 if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']):
+                                    print(f"Entering Buy")
+                                    # continue
                                     success, price = execute_trade('buy', CONFIG['risk_management']['initial_sl'])
                                     if success:
                                         state.in_trade = True
@@ -398,6 +466,9 @@ def main():
                         if tick.bid <= state.ghost_low + buffer:
                             if tick.bid < state.daily_open_price:
                                 if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']):
+                                    print(f"Entering Sell")
+                                    print(tick)
+                                    # continue
                                     success, price = execute_trade('sell', CONFIG['risk_management']['initial_sl'])
                                     if success:
                                         state.in_trade = True

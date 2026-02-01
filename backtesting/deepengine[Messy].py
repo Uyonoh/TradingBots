@@ -16,8 +16,9 @@ warnings.filterwarnings('ignore')
 # 1. CONFIGURATION (Same as original)
 # -------------------------------------------------------------------
 # Make diff vel multipliers and lookbacks for the different opens/times
+SYMBOL = "GER40" #"#BTCUSD"
 PRO_SETUP = {
-    "bias_filter": {"enabled": True, "buy_threshold": 0.75, "sell_threshold": 0.25},
+    "bias_filter": {"enabled": True, "buy_threshold": 0.65, "sell_threshold": 0.35},
     "entry_conditions": {"15min_buffer": 10, "velocity_multiplier": 1.5, "lookback_period": "60min"},
     "risk_management": {
         "initial_sl": [50, 90], 
@@ -31,11 +32,36 @@ PRO_SETUP = {
         ],
         "tp_override": {"fast_threshold": 30, "slow_threshold": 180}
     },
-    "session_constraints": {"entry_start": "08:15", "mandatory_close": "17:30"}
+    "session_constraints": {'day_open': '09:00', "entry_start": "08:15", "mandatory_close": "17:30"}
 }
 PRO_SETUP = {
+    # GER40
     'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25}, 
-    'entry_conditions': {'15min_buffer': np.int64(10), 'velocity_multiplier': 2.2, 'lookback_period': '3600S'}, 
+    'entry_conditions': {'15min_buffer': np.int64(10), 'velocity_multiplier': 2.0, 'lookback_period': '3600S'}, 
+    'risk_management': {
+        'initial_sl': [np.int64(50), np.int64(50)], 
+        'trailing_stages': [
+            {'min_profit': 0, 'max_profit': np.int64(30), 'retention': -1}, 
+            {'min_profit': np.int64(30), 'max_profit': np.int64(60), 'retention': 0.55}, 
+            {'min_profit': np.int64(60), 'max_profit': np.int64(90), 'retention': 0.6}, 
+            {'min_profit': np.int64(90), 'max_profit': np.int64(120), 'retention': 0.65}, 
+            {'min_profit': np.int64(120), 'max_profit': np.int64(150), 'retention': 0.7}, 
+            {'min_profit': np.int64(150), 'retention': 0.95}
+            ], 
+        'tp_override': {'fast_threshold': np.int64(15), 'slow_threshold': np.int64(120)}
+        }, 
+    'session_constraints': {
+        'day_open': '09:00',
+        'entry_start': '05:50', 'mandatory_close': '23:30',
+        'ghost_open': '08:00', 'ghost_close': '08:15',
+    }
+    # "session_constraints": {"entry_start": "08:15", "mandatory_close": "17:30"}
+}
+
+PRO_SETUP = {
+    # GER40
+    'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25}, 
+    'entry_conditions': {'15min_buffer': np.int64(5), 'velocity_multiplier': 2.2, 'lookback_period': '60min'}, 
     'risk_management': {
         'initial_sl': [np.int64(50), np.int64(50)], 
         'trailing_stages': [
@@ -47,11 +73,20 @@ PRO_SETUP = {
             {'min_profit': np.int64(150), 'retention': 0.95}
             ], 
         'tp_override': {'fast_threshold': np.int64(15), 'slow_threshold': np.int64(120)}}, 
-        'session_constraints': {'entry_start': '10:00', 'mandatory_close': '17:00'}
-        # "session_constraints": {"entry_start": "08:15", "mandatory_close": "17:30"}
+        'session_constraints': {
+            'day_open': '09:00', 'entry_start': '9:30', 'mandatory_close': '17:00',
+            'ghost_open': '08:00', 'ghost_close': '08:15',
+            }
         }
+PRO_SETUP = {'bias_filter': {'enabled': True, 'buy_threshold': 0.6, 'sell_threshold': 0.3}, 'entry_conditions': {'15min_buffer': np.int64(20), 'velocity_multiplier': 1.9626786644578, 'lookback_period': '3600S'}, 'risk_management': {'initial_sl': [np.int64(50), np.int64(50)], 'trailing_stages': [{'min_profit': 0, 'max_profit': np.int64(30), 'retention': -1}, {'min_profit': np.int64(30), 'max_profit': np.int64(60), 'retention': 0.9}, {'min_profit': np.int64(60), 'max_profit': np.int64(90), 'retention': 0.95}, {'min_profit': np.int64(90), 'max_profit': np.int64(120), 'retention': 0.95}, {'min_profit': np.int64(120), 'max_profit': np.int64(150), 'retention': 0.95}, {'min_profit': np.int64(150), 'retention': 0.95}]}, 'session_constraints': {'day_open': '9:00', 'entry_start': '10:00', 'mandatory_close': '17:00', 'ghost_open': '8:00', 'ghost_close': '8:30'}}
+PRO_SETUP = {'bias_filter': {'enabled': True, 'buy_threshold': 0.6, 'sell_threshold': 0.4}, 'entry_conditions': {'15min_buffer': np.int64(10), 'velocity_multiplier': 2, 'lookback_period': '3600S'}, 'risk_management': {'initial_sl': [np.int64(50), np.int64(50)], 'trailing_stages': [{'min_profit': 0, 'max_profit': np.int64(30), 'retention': -1}, {'min_profit': np.int64(30), 'max_profit': np.int64(60), 'retention': 0.9}, {'min_profit': np.int64(60), 'max_profit': np.int64(90), 'retention': 0.95}, {'min_profit': np.int64(90), 'max_profit': np.int64(120), 'retention': 0.95}, {'min_profit': np.int64(120), 'max_profit': np.int64(150), 'retention': 0.95}, {'min_profit': np.int64(150), 'retention': 0.95}]}, 'session_constraints': {'day_open': '9:00', 'entry_start': '10:00', 'mandatory_close': '17:00', 'ghost_open': '8:00', 'ghost_close': '8:30'}}
+{'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25}, 'entry_conditions': {'15min_buffer': np.int64(7), 'velocity_multiplier': 2, 'lookback_period': '3600S'}, 'risk_management': {'initial_sl': [np.int64(50), np.int64(50)], 'trailing_stages': [{'min_profit': 0, 'max_profit': np.int64(30), 'retention': -1}, {'min_profit': np.int64(30), 'max_profit': np.int64(98), 'retention': 0.76}, {'min_profit': np.int64(98), 'max_profit': np.int64(147), 'retention': 0.81}, {'min_profit': np.int64(147), 'max_profit': np.int64(196), 'retention': 0.87}, {'min_profit': np.int64(196), 'max_profit': np.int64(245), 'retention': 0.92}, {'min_profit': np.int64(245), 'retention': 0.95}], 'tp_override': {'fast_threshold': np.int64(15), 'slow_threshold': np.int64(120)}}, 'session_constraints': {'day_open': '09:00', 'entry_start': '10:00', 'mandatory_close': '16:30', 'ghost_open': '08:00', 'ghost_close': '08:30'}}
+
+# PRO_SETUP = {'bias_filter': {'enabled': True, 'buy_threshold': 0.860110398149475, 'sell_threshold': 0.1}, 'entry_conditions': {'15min_buffer': np.int64(7), 'velocity_multiplier': 2.2, 'lookback_period': '4694S'}, 'risk_management': {'initial_sl': [np.int64(461), np.int64(461)], 'trailing_stages': [{'min_profit': 0, 'max_profit': np.int64(30), 'retention': -1}, {'min_profit': np.int64(30), 'max_profit': np.int64(60), 'retention': 0.65}, {'min_profit': np.int64(60), 'max_profit': np.int64(90), 'retention': 0.71}, {'min_profit': np.int64(90), 'max_profit': np.int64(120), 'retention': 0.77}, {'min_profit': np.int64(120), 'max_profit': np.int64(150), 'retention': 0.83}, {'min_profit': np.int64(150), 'retention': 0.95}], 'tp_override': {'fast_threshold': np.int64(29), 'slow_threshold': np.int64(138)}}, 'session_constraints': {'day_open': '09:00', 'entry_start': '07:00', 'mandatory_close': '16:30', 'ghost_open': '07:00', 'ghost_close': '07:30'}}
+# PRO_SETUP = {'bias_filter': {'enabled': True, 'buy_threshold': 0.7, 'sell_threshold': 0.3}, 'entry_conditions': {'15min_buffer': np.int64(10), 'velocity_multiplier': 2, 'lookback_period': '3600S'}, 'risk_management': {'initial_sl': [np.int64(50), np.int64(50)], 'trailing_stages': [{'min_profit': 0, 'max_profit': np.int64(46), 'retention': -1}, {'min_profit': np.int64(46), 'max_profit': np.int64(92), 'retention': 0.45}, {'min_profit': np.int64(92), 'max_profit': np.int64(138), 'retention': 0.54}, {'min_profit': np.int64(138), 'max_profit': np.int64(184), 'retention': 0.63}, {'min_profit': np.int64(184), 'max_profit': np.int64(230), 'retention': 0.72}, {'min_profit': np.int64(230), 'retention': 0.95}], 'tp_override': {'fast_threshold': np.int64(25), 'slow_threshold': np.int64(279)}}, 'session_constraints': {'day_open': '03:00', 'entry_start': '07:35', 'mandatory_close': '19:00', 'ghost_open': '07:04', 'ghost_close': '07:22'}}
 
 # PRO_SETUP = {
+#     # GER40
 #     'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25}, 
 #     'entry_conditions': {'15min_buffer': np.int64(5), 'velocity_multiplier': 2.2, 'lookback_period': '60min'}, 
 #     'risk_management': {
@@ -65,7 +100,10 @@ PRO_SETUP = {
 #             {'min_profit': np.int64(150), 'retention': 0.95}
 #             ], 
 #         'tp_override': {'fast_threshold': np.int64(15), 'slow_threshold': np.int64(120)}}, 
-#         'session_constraints': {'entry_start': '10:00', 'mandatory_close': '16:41'}
+#         'session_constraints': {
+#             'day_open': '09:00', 'entry_start': '10:00', 'mandatory_close': '16:41',
+#             'ghost_open': '08:00', 'ghost_close': '08:15',
+#             }
 #         }
 
 CET = pytz.timezone('Europe/Berlin')
@@ -151,34 +189,83 @@ class SignalPrecomputer:
         return biases.to_dict()
 
     @staticmethod
-    def get_ghost_ranges(df):
+    # price = ghost_data['ask'] if bias == "buy" else ghost_data['bid']
+    def get_ghost_ranges(df: pd.DataFrame, config: dict, biases: dict):
         df_cet = df.copy()
         df_cet.index = df_cet.index.tz_convert(CET)
-        ghost_data = df_cet.between_time("08:00", "08:15")
-        mid = (ghost_data['bid'] + ghost_data['ask']) / 2
-        ranges = mid.groupby(mid.index.date).agg(['min', 'max'])
+        
+        # 1. Extract session data
+        start = config['session_constraints']['ghost_open']
+        end = config['session_constraints']['ghost_close']
+        ghost_data = df_cet.between_time(start, end)
+        
+        # 2. Map the bias dict to the ghost_data index (by date)
+        # This creates a Series of 'buy', 'sell', or 'straddle' aligned with the timestamps
+        row_biases = ghost_data.index.date
+        row_biases = pd.Series(row_biases).map(biases).values
+
+        # 3. Define conditions based on the mapped biases
+        conditions = [
+            (row_biases == 'buy'),
+            (row_biases == 'sell'),
+            (row_biases == 'straddle')
+        ]
+        
+        choices = [
+            ghost_data['ask'],
+            ghost_data['bid'],
+            (ghost_data['bid'] + ghost_data['ask']) / 2
+        ]
+        
+        # 4. Apply vectorised selection
+        price_array = np.select(conditions, choices, default=(ghost_data['bid'] + ghost_data['ask']) / 2)
+        price_series = pd.Series(price_array, index=ghost_data.index)
+        
+        # 5. Aggregate to get daily high/low (max/min)
+        ranges = price_series.groupby(price_series.index.date).agg(['min', 'max'])
         return ranges.to_dict('index')
 
 # -------------------------------------------------------------------
 # 3. HIGH-SPEED ENGINE (NUMPY CORE)
 # -------------------------------------------------------------------
 
-def get_todays_open_price(df, index):
+def get_todays_open_price(df, index, biases, config):
     """
-    Returns the price at the 09:00 Frankfurt Open for each day.
+    Returns the price at the Frankfurt Open for each day based on the daily bias dict.
     """
-    mid_cet = (df['bid'] + df['ask']) / 2
+    # 1. Map the daily biases dict to every row in the dataframe based on date
+    # This aligns 'buy', 'sell', or 'straddle' with the high-frequency index
+    row_dates = index.date
+    row_biases = pd.Series(row_dates).map(biases).values
+
+    # 2. Select price based on bias using boolean masking
+    conditions = [
+        (row_biases == 'buy'),
+        (row_biases == 'sell'),
+        (row_biases == 'straddle')
+    ]
+    choices = [
+        df['ask'],
+        df['bid'],
+        (df['bid'] + df['ask']) / 2
+    ]
     
-    # 1. Ensure we are in Frankfurt time
-    mid_cet.index = index # = mid.dt.tz_convert('Europe/Berlin')
+    # Default to mid if bias is missing or 'straddle'
+    selected_price = np.select(conditions, choices, default=(df['bid'] + df['ask']) / 2)
     
-    # 2. Filter for everything from 09:00 onwards
-    post_open = mid_cet[mid_cet.index.time >= DT.time(9, 0)]
+    # 3. Reconstruct Series with the provided CET index
+    price_series = pd.Series(selected_price, index=index)
     
-    # 3. Group by date and take the first value (the 09:00 price)
+    # 4. Parse open time from config and filter
+    open_time_str = config['session_constraints']['day_open'] # e.g., "09:00"
+    open_h, open_m = [int(t) for t in open_time_str.split(":")]
+    
+    # Filter for ticks occurring at or after the open time
+    post_open = price_series[price_series.index.time >= DT.time(open_h, open_m)]
+    
+    # 5. Group by date and take the first value (the opening tick)
     daily_opens = post_open.groupby(post_open.index.date).first()
     
-    # Return as a dictionary mapping {date: open_price}
     return daily_opens.to_dict()
 
 def process_chunk_parallel(year, month, config):
@@ -186,7 +273,7 @@ def process_chunk_parallel(year, month, config):
     Worker function for parallel execution.
     Handles data loading and the high-speed tick loop.
     """
-    path = Path(f"./dax_ticks/GER40_{year}_{month:02d}.parquet")
+    path = Path(f"./tick_data/{SYMBOL}_{year}_{month:02d}.parquet")
     if not path.exists(): 
         print(f"File not found: {path}")
         return []
@@ -198,14 +285,16 @@ def process_chunk_parallel(year, month, config):
     
     # 1. Precompute Signals (Vectorized)
     biases = SignalPrecomputer.get_daily_bias(df, config['bias_filter']['buy_threshold'], config['bias_filter']['sell_threshold'])
-    ghost_ranges = SignalPrecomputer.get_ghost_ranges(df)
+    ghost_ranges = SignalPrecomputer.get_ghost_ranges(df, config, biases)
     velocity_signals = SignalPrecomputer.compute_velocity(
         df, config['entry_conditions']['velocity_multiplier'], config['entry_conditions']['lookback_period']
     )
 
     # 2. Prepare NumPy arrays for the loop
     # This is where the magic happens for performance
-    times = df.index.tz_convert(zone).tz_localize(None).values
+    server_idx = df.index.tz_convert(zone)
+    date_times = server_idx.astype(int)
+    dates = server_idx.date # Dates must be server dates
     bids = df['bid'].values
     asks = df['ask'].values
     mids = (bids + asks) / 2.0
@@ -214,8 +303,7 @@ def process_chunk_parallel(year, month, config):
     df_cet_idx = df.index.tz_convert(CET)
     hours = df_cet_idx.hour
     minutes = df_cet_idx.minute
-    dates = df_cet_idx.date
-    daily_opens = get_todays_open_price(df, df_cet_idx)
+    daily_opens = get_todays_open_price(df, df_cet_idx, biases, config)
     
     trades = []
     in_trade = False
@@ -241,7 +329,7 @@ def process_chunk_parallel(year, month, config):
     
     for i in range(len(mids)):
         curr_date = dates[i]
-        curr_time = times[i]
+        curr_time = date_times[i]
         curr_mid = mids[i]
         curr_bid = bids[i]
         curr_ask = asks[i]
@@ -283,7 +371,7 @@ def process_chunk_parallel(year, month, config):
                 continue
             
             # Trailing Stop Calculation
-            pnl = (curr_mid - entry_p) if direction == 'buy' else (entry_p - curr_mid)
+            pnl = (curr_bid - entry_p) if direction == 'buy' else (entry_p - curr_ask)
             max_pnl = max(max_pnl, pnl)
             
             # Dynamic Retention
@@ -361,6 +449,13 @@ def calculate_equity(trades):
     # 1. Create columns if they don't exist
     trades['pnl'] = 0.0
     trades['equity'] = 0.0
+
+    # First row with 0 equity
+    new_row = trades.iloc[[0]].copy()
+    new_row.at[new_row.index[0], 'profit_ticks'] = 0.0
+    # new_row.index = [new_row.index[0] - pd.Timedelta(hours=1)]
+    trades = pd.concat([new_row, trades], ignore_index=True)
+
     
     # 2. Sequential calculation (Equity affects Lot Size)
     for index, row in trades.iterrows():
@@ -377,6 +472,9 @@ def calculate_equity(trades):
         # Write back to DataFrame using .at for speed
         trades.at[index, 'pnl'] = trade_pnl
         trades.at[index, 'equity'] = current_equity
+    
+    
+    # trades = pd.concat([t1, trades[:1], trades[1:]])
         
     return trades
 
@@ -476,12 +574,23 @@ def create_dynamic_config(params):
     """
     Converts the flat list of optimization parameters into the PRO_SETUP dict.
     """
-    (sl, buf, vel, tp_fast, tp_slow, start_off, end_off, 
-     p_step, r_base, r_inc) = params
+    (sl, buf, vel, #tp_fast, tp_slow,
+    #  start_off, end_off, 
+     p_step, r_base, r_inc, buy_t, sell_t,
+    #   gopen_off, gend_off,
+    #  lookback, open_m
+     ) = params
 
     # Convert offsets to HH:MM strings
-    start_time = (datetime(2025, 1, 1, 6, 0) + timedelta(minutes=int(start_off))).strftime("%H:%M")
-    end_time = (datetime(2025, 1, 1, 16, 0) + timedelta(minutes=int(end_off))).strftime("%H:%M")
+    # day_open = (datetime(2025, 1, 1, 0, 0) + timedelta(minutes=int(open_m * 30))).strftime("%H:%M")
+
+    # start_time = (datetime(2025, 1, 1, 6, 0) + timedelta(minutes=int(start_off))).strftime("%H:%M")
+    # end_time = (datetime(2025, 1, 1, 16, 0) + timedelta(minutes=int(end_off))).strftime("%H:%M")
+
+    # ghost_open = datetime(2025, 1, 1, 6, 0) + timedelta(minutes=int(gopen_off))
+    # ghost_close = ghost_open + timedelta(minutes=int(gend_off))
+    # ghost_open = ghost_open.strftime("%H:%M")
+    # ghost_close = ghost_close.strftime("%H:%M")
 
     # Generate 5 Trailing Stages based on Profile
     # Stage 0 is always retention -1 (Initial SL)
@@ -499,14 +608,18 @@ def create_dynamic_config(params):
     stages.append({"min_profit": p_step * 5, "retention": 0.95})
 
     config = {
-        "bias_filter": {"enabled": True, "buy_threshold": 0.75, "sell_threshold": 0.25},
-        "entry_conditions": {"15min_buffer": buf, "velocity_multiplier": vel, "lookback_period": "60min"},
+        "bias_filter": {"enabled": True, "buy_threshold": buy_t, "sell_threshold": sell_t},
+        "entry_conditions": {"15min_buffer": buf, "velocity_multiplier": vel, "lookback_period": "3600S"},
         "risk_management": {
             "initial_sl": [sl, sl],
             "trailing_stages": stages,
-            "tp_override": {"fast_threshold": tp_fast, "slow_threshold": tp_slow}
+            # "tp_override": {"fast_threshold": tp_fast, "slow_threshold": tp_slow}
         },
-        "session_constraints": {"entry_start": start_time, "mandatory_close": end_time}
+        "session_constraints": {
+            'day_open': "9:00",
+            "entry_start": "10:00", "mandatory_close": "17:00",
+            'ghost_open': "8:00", 'ghost_close': "8:30"
+            }
     }
     return config
 
@@ -519,10 +632,11 @@ def full_objective(params):
     engine = DAXTickEngine(current_config)
     
     # We optimize on a 4-month window for speed on i5/8GB RAM
-    results = engine.run_backtest(2025, 1, 2025, 6) 
+    results = engine.run_backtest(2025, 4, 2025, 9) 
+    len_months = 9 - 4 + 1
     
-    if results.empty or len(results) < 10:
-        return 0.0 # Penalty for no activity
+    if results.empty or len(results) < len_months * 4:
+        return 10.0 # Penalty for no activity
     
     # Calculate Risk-Adjusted Return
     returns = results['profit_ticks']
@@ -557,16 +671,22 @@ def plot_trailing_logic(config):
 
 def run_pro_optimization():
     space = [
-        Integer(50, 120, name='initial_sl'),
+        Integer(50, 100, name='initial_sl'),
         Integer(5, 20, name='buffer_ticks'),
-        Real(1.2, 2.2, name='velocity_multiplier'),
-        Integer(15, 60, name='tp_fast'),        # Fast TP override mins
-        Integer(120, 300, name='tp_slow'),      # Slow TP override mins
-        Integer(0, 240, name='start_offset'),   # Mins after 06:00
-        Integer(0, 180, name='end_offset'),     # Mins after 16:00
-        Integer(30, 100, name='profit_step'),   # Ticks per stage
+        Real(1.5, 2.5, name='velocity_multiplier'),
+        # Integer(15, 60, name='tp_fast'),        # Fast TP override mins
+        # Integer(120, 300, name='tp_slow'),      # Slow TP override mins
+        # Integer(0, 240, name='start_offset'),   # Mins after 06:00
+        # Integer(0, 180, name='end_offset'),     # Mins after 16:00
+        Integer(30, 50, name='profit_step'),   # Ticks per stage
         Real(0.3, 0.7, name='retention_base'),  # Starting retention
-        Real(0.05, 0.2, name='retention_inc')   # How much retention grows per stage
+        Real(0.05, 0.2, name='retention_inc'),   # How much retention grows per stage
+        Real(0.6, 0.8, name='buy_threshold'),
+        Real(0.2, 0.4, name='sell_threshold'),
+        # Integer(0, 240, name='ghost_open'),   # Mins after 06:00
+        # Integer(0, 60, name='ghost_close'),
+        # Integer(60 * 10, 60 * 60 * 1.5, name='lookback_period'),
+        # Integer(0, 18, name='day_open'),
     ]
     
     print("💎 Starting Professional Parameter Search...")
@@ -575,8 +695,8 @@ def run_pro_optimization():
     best_cfg = create_dynamic_config(res.x)
     print("\n✅ OPTIMIZATION COMPLETE")
     print(f"Best Session: {best_cfg['session_constraints']['entry_start']} to {best_cfg['session_constraints']['mandatory_close']}")
-    print(f"Best TP Overrides: {best_cfg['risk_management']['tp_override']}")
-    print(f"Best Trailing Stages: {best_cfg['risk_management']['trailing_stages']}")
+    # print(f"Best TP Overrides: {best_cfg['risk_management']['tp_override']}")
+    # print(f"Best Trailing Stages: {best_cfg['risk_management']['trailing_stages']}")
     print("="*80)
     print("BEST CoNFIG")
     print(best_cfg)
@@ -607,7 +727,7 @@ if __name__ == "__main__":
     else:
         engine = DAXTickEngine(PRO_SETUP)
         # Example: Run for 2025
-        results = engine.run_backtest(2025, 1, 2026, 1)
+        results = engine.run_backtest(2025, 1, 2025, 12)
         
         if not results.empty:
             results = calculate_equity(results)

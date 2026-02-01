@@ -33,8 +33,8 @@ class TickDownloader:
     def download_ticks(self):
         print("Beginign")
         
-        start_date = datetime(2026, 1, 28)
-        end_date = datetime(2026, 1, 28)
+        start_date = datetime(2025, 1, 1)
+        end_date = datetime(2026, 1, 31)
 
         from_date = int(start_date.timestamp())
         to_date = int(end_date.timestamp())
@@ -61,6 +61,76 @@ class TickDownloader:
         ticks_df.to_csv(file_path, index=False)
         print(f"Successfully saved ticks to {file_path}")
 
+from datetime import datetime, timedelta
+from pathlib import Path
+import os
+import pytz
+
+CET = pytz.timezone('Europe/Berlin')
+UTC = pytz.utc
+
+class DAXTickDataLoader:
+    """
+    Memory-optimized loading of MT5 tick data.
+    Fetches data in monthly chunks, downcasts, saves as Parquet.
+    """
+    def __init__(self, symbol='GER40', data_dir='./tick_data'):
+        self.symbol = symbol
+        self.data_dir = Path(data_dir)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        
+    def fetch_ticks_chunk(self, start_dt, end_dt):
+        """Fetch ticks for a given chunk (max 1 month) from MT5."""
+        if not mt5.initialize():
+            raise ConnectionError("MT5 initialize failed")
+        ticks = mt5.copy_ticks_range(self.symbol, start_dt, end_dt, mt5.COPY_TICKS_ALL)
+        mt5.shutdown()
+        if ticks is None or len(ticks) == 0:
+            return None
+        df = pd.DataFrame(ticks)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('time', inplace=True)
+        # Downcast to save memory
+        df[['bid','ask','last']] = df[['bid','ask','last']].astype('float32')
+        df[['volume','flags']] = df[['volume','flags']].astype('int32')
+        return df
+    
+    def fetch_and_store_range(self, start_date, end_date):
+        """Fetch ticks in monthly chunks and store as partitioned Parquet."""
+        current = start_date.replace(day=1, hour=0, minute=0, second=0)
+        end_date = end_date.replace(hour=23, minute=59, second=59)
+        while current < end_date:
+            month_end = (current + timedelta(days=32)).replace(day=1) - timedelta(seconds=1)
+            month_end = min(month_end, end_date)
+            print(f"Processing {current.date()} to {month_end.date()}")
+            year, month = current.year, current.month
+            path = self.data_dir / f"{self.symbol}_{year}_{month:02d}.parquet"
+
+            if not os.path.exists(path):
+                df = self.fetch_ticks_chunk(current, month_end)
+                if df is not None:   
+                    df.to_parquet(path, compression='zstd')
+            else:
+                print("    File already exists")
+            current = (month_end + timedelta(seconds=1)).replace(day=1)
+        print("Data fetch complete.")
+    
+    def load_chunk(self, year, month):
+        """Load a single monthly parquet file."""
+        path = self.data_dir / f"{self.symbol}_{year}_{month:02d}.parquet"
+        if not os.path.exists(path): #path.exists():
+            raise FileNotFoundError(f"The file at {path} cannot be found!. \nThe current directory is {os.getcwd()}")
+        df = pd.read_parquet(path)
+        # Ensure UTC index
+        df.index = pd.to_datetime(df.index).tz_localize(UTC)
+        return df
+
 if __name__ == "__main__":
-    downloader = TickDownloader("GER40")
-    downloader.download_ticks()
+    # downloader = TickDownloader("GER40")
+    # downloader.download_ticks()
+
+    loader = DAXTickDataLoader(symbol='#BTCUSD', data_dir='./tick_data')
+    loader.fetch_and_store_range(
+        start_date=datetime(2025,1,1, tzinfo=UTC),
+        end_date=datetime(2026,1,31, tzinfo=UTC)
+    )
