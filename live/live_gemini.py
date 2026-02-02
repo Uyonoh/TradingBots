@@ -2,7 +2,8 @@ import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
 import pytz
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, timezone, date, time
+import calendar
 import time as t_mod
 from collections import deque
 import os
@@ -18,10 +19,10 @@ LOGIN = int(os.environ["ACCOUNT_ID"])
 PASSWORD = os.environ["PASSWORD"]
 SERVER = os.environ["SERVER"]
 
-SYMBOL = "#BTCUSD"  # Update for your broker (e.g., DE40, DAX40)
+SYMBOL = "GBPUSD"  # Update for your broker (e.g., DE40, DAX40)
 VOLUME = 0.01      # Lot size
 DEVIATION = 10    # Slippage tolerance in points
-MAGIC_NUM = 123456
+MAGIC_NUM = 1234569
 
 # Strategy Parameters (Matching your backtest)
 CONFIG = {
@@ -43,13 +44,34 @@ CONFIG = {
             ],
     },
     'session': {
-        'start_hour': 5, 'start_minute': 0, # Entry Window Start
+        'start_hour': 5, 'start_minute': 0, # Entry Window Start #Error: convert these to time()
         'end_hour': 23, 'end_minute': 30,   # Mandatory Close
         'ghost_start': time(8, 0),
         'ghost_end': time(8, 15)
     }
 }
-
+CONFIG = {
+    'bias_filter': {'buy_threshold': 0.6, 'sell_threshold': 0.4}, 
+    'entry_conditions': {'15min_buffer': 10, 'velocity_multiplier': 2, 'lookback_period': 60*60}, 
+    'risk_management': {
+        'initial_sl': 50, 
+        'trailing_stages': [
+            {'min_profit': 0,   'max_profit': 30,  'retention': -1}, 
+            {'min_profit': 30,  'max_profit': 60,  'retention': 0.5}, 
+            {'min_profit': 60,  'max_profit': 90,  'retention': 0.7}, 
+            {'min_profit': 90,  'max_profit': 120, 'retention': 0.8}, 
+            {'min_profit': 120, 'max_profit': 150, 'retention': 0.9}, 
+            {'min_profit': 150, 'retention': 0.95}
+            ]
+        },
+    'session': {
+        'day_open': time(9, 0),
+        'start_hour': 10, 'start_minute': 0, # Entry Window Start
+        'end_hour': 17, 'end_minute': 00,   # Mandatory Close
+        'ghost_start': time(8, 0),
+        'ghost_end': time(8, 30)
+        }, 
+    }
 # Timezones
 CET = pytz.timezone('Europe/Berlin')
 UTC = pytz.utc
@@ -71,19 +93,13 @@ class VelocityMonitor:
         self.last_update = t_mod.time()
 
     def get_server_timestamp(self):
-        utc_now = datetime.now(UTC)
-        # Error: remove hardcodded hours, should be dynamic
-        server_diff = timedelta(hours=2) # UTC+2
-        server_time = utc_now + server_diff
+        tick = mt5.symbol_info_tick(SYMBOL)
 
-        return server_time.timestamp()
+        return tick.time_msc / 1000
 
     def get_ticks(self, server_time=None):
-        if server_time is None:
-            server_time = self.get_server_timestamp()
-
         ticks = mt5.copy_ticks_from(SYMBOL, server_time, 10000, mt5.COPY_TICKS_ALL)
-        return ticks
+        return ticks[1:]
     
     def get_tick_timestamps(self, server_time=None):
         ticks = self.get_ticks(server_time)
@@ -95,11 +111,11 @@ class VelocityMonitor:
     def on_tick(self):
         now = self.get_server_timestamp()
         if len(self.tick_timestamps) == 0:
-            timestamps = self.get_tick_timestamps()
+            timestamps = self.get_tick_timestamps(now)
         else:
             last_timestamp = self.tick_timestamps[-1]
-            timestamps = self.get_tick_timestamps(last_timestamp + 0.001)
-
+            timestamps = self.get_tick_timestamps(last_timestamp)
+        
         self.tick_timestamps.extend(timestamps)
         self.cleanup(now)
 
@@ -156,11 +172,49 @@ class StrategyState:
 # -------------------------------------------------------------------
 # Error: incorrect implementation, should use UTC2/3 for server
 # Might not need server time? Trade CET
+def get_server_timezone(year=None, month=None, day=None):
+    """
+    Returns the current server time based on:
+    Winter: GMT+2
+    Summer: GMT+3 (Last Sunday March to Last Sunday October)
+    """
+    if (year is None) or (month is None) or (day is None):
+        now_utc = datetime.now(timezone.utc)
+        year = now_utc.year
+    else:
+        now_utc = datetime(year, month, day, tzinfo=timezone.utc)
+
+    # Helper to find the last Sunday of a given month
+    def last_sunday(year, month):
+        # Get the last day of the month
+        last_day = calendar.monthrange(year, month)[1]
+        dt = datetime(year, month, last_day, tzinfo=timezone.utc)
+        # Weekday 6 is Sunday in Python's weekday()
+        offset = (dt.weekday() + 1) % 7 
+        return dt - timedelta(days=offset)
+
+    # DST boundaries (usually starts/ends at 01:00 UTC for EU-style rules)
+    dst_start = last_sunday(year, 3).replace(hour=1)
+    dst_end = last_sunday(year, 10).replace(hour=1)
+
+    # Determine offset: Summer (GMT+3) if within range, else Winter (GMT+2)
+    if dst_start <= now_utc < dst_end:
+        offset_hours = 3
+        zone = UTC3
+    else:
+        offset_hours = 2
+        zone = UTC2
+
+    server_time = now_utc + timedelta(hours=offset_hours)
+    return zone
+
 def get_server_time():
         utc_now = datetime.now(UTC)
         # Error: remove hardcodded hours, should be dynamic
-        server_diff = timedelta(hours=2) # UTC+2
-        server_time = utc_now + server_diff
+        tick = mt5.symbol_info_tick(SYMBOL)
+        server_time = datetime.fromtimestamp(tick.time)
+        zone = get_server_timezone()
+        server_time = zone.localize(server_time)
 
         return server_time
 
@@ -198,7 +252,7 @@ def calculate_daily_bias():
 
 def get_ghost_range(today_date):
     """
-    Fetches M1 bars from 08:00 to 08:15 CET to determine range.
+    Fetches M1 bars from CET to determine range.
     """
     # Construct CET times
     start_dt = datetime.combine(today_date, CONFIG['session']['ghost_start'])
@@ -220,10 +274,32 @@ def get_ghost_range(today_date):
     
     return g_min, g_max
 
-def execute_trade(direction, sl_points):
+def get_filling_type(symbol):
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        return None
+    
+    # Check bitmask for allowed modes
+    # SYMBOL_FILLING_FOK = 1
+    # SYMBOL_FILLING_IOC = 2
+    if info.filling_mode & 1:
+        return mt5.ORDER_FILLING_FOK
+    elif info.filling_mode & 2:
+        return mt5.ORDER_FILLING_IOC
+    else:
+        # Default for Market Execution symbols
+        return mt5.ORDER_FILLING_RETURN
+
+def execute_trade(direction, sl_pips):
     """Sends order to MT5"""
     tick = mt5.symbol_info_tick(SYMBOL)
-    point = mt5.symbol_info(SYMBOL).point
+    info = mt5.symbol_info(SYMBOL)
+    point = info.point
+    points_per_pip = 0.01 if info.digits in [5] else 1
+    pip_value = point * points_per_pip
+    filling = get_filling_type(SYMBOL)
+
+    sl_points = sl_pips if info.trade_calc_mode == 2 else sl_pips / 1000
     
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -231,12 +307,12 @@ def execute_trade(direction, sl_points):
         "volume": VOLUME,
         "type": mt5.ORDER_TYPE_BUY if direction == 'buy' else mt5.ORDER_TYPE_SELL,
         "price": tick.ask if direction == 'buy' else tick.bid, # Error: Might need to add padding as broker might not allow entry close to current price
-        "sl": (tick.ask - sl_points * point) if direction == 'buy' else (tick.bid + sl_points * point),
+        "sl": (tick.ask - sl_points) if direction == 'buy' else (tick.bid + sl_points),
         "deviation": DEVIATION,
         "magic": MAGIC_NUM,
         "comment": "LiveDemo_Bot",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": filling,
     }
     
     result = mt5.order_send(request)
@@ -275,7 +351,11 @@ def modify_sl(ticket, new_sl):
         "sl": new_sl,
         "magic": MAGIC_NUM
     }
-    mt5.order_send(request)
+    result = mt5.order_send(request)
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        print(f"SL modification Failed: {result.comment}")
+    
+        
 
 # -------------------------------------------------------------------
 # MAIN LOOP
@@ -313,6 +393,21 @@ def main():
         now = get_server_time()
         now_cet = get_server_time_cet()
         today_date = now.date()
+
+        # session_start = time(CONFIG['session']['start_hour'], CONFIG['session']['start_minute'])
+        # session_end = time(CONFIG['session']['end_hour'], CONFIG['session']['end_minute'])
+        # session_start = CET.localize(datetime.combine(date.today(), session_start))
+        # session_end = CET.localize(datetime.combine(date.today(), session_end))
+        # if now_cet.time() < (session_start - timedelta(minutes=65)).time():
+        #     print(now_cet)
+        #     print(f"Session starts at {session_start}: T - {(session_start - now_cet)} to initiation")
+        #     t_mod.sleep(60)
+        #     continue
+        # if now_cet.time() > (session_end + timedelta(minutes=5)).time():
+        #     print("Session Ended")
+        #     print(now_cet)
+        #     t_mod.sleep(60 * 5)
+        #     continue
         
         # 3. New Day Logic
         if state.current_date != today_date:
@@ -353,10 +448,10 @@ def main():
         # B. Capture Daily Open (Frankfurt 09:00)
         if state.daily_open_price is None:
             # If it is 09:00 or later
-            target_open = time(CONFIG['session']['start_hour'], 0)
+            target_open = CONFIG['session']['day_open']
             if now_cet.time() >= target_open:
                 # Error: might need to use assk/bid based on sell/buy
-                state.daily_open_price = tick.ask # Approximate open with current Ask
+                state.daily_open_price = tick.ask if state.bias == "buy" else tick.bid # Approximate open with current Ask
                 print(f"Market Open Price Recorded: {state.daily_open_price}")
 
         # C. Check for existing positions (Recovery/Management)
@@ -382,7 +477,10 @@ def main():
             current_profit_points = (tick.bid - pos.price_open) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - tick.ask)
             # Adjust for point value
             point = mt5.symbol_info(SYMBOL).point
-            current_profit_points /= point #in pips
+            info = mt5.symbol_info(SYMBOL)
+            current_profit_points = current_profit_points if info.trade_calc_mode == 2 else current_profit_points * 1000 * 100
+            # current_profit_points *= point #in pips
+            # print(current_profit_points)
             
             state.max_pnl = max(state.max_pnl, current_profit_points)
             
@@ -397,6 +495,7 @@ def main():
             
             if triggered:
                 # Calculate new SL
+                # print(best_retention)
                 if best_retention == -1:
                     # Error: should set to original sl
                      # Break even + 1 point
@@ -404,17 +503,19 @@ def main():
                     # new_sl = pos.price_open + (1.0 * point) if pos.type == mt5.ORDER_TYPE_BUY else pos.price_open - (1.0 * point)
                     pass
                 else:
-                    trail_dist = state.max_pnl * best_retention * point
+                    trail_dist = state.max_pnl * best_retention
+                    info = mt5.symbol_info(SYMBOL)
+                    trail_dist = trail_dist if info.trade_calc_mode == 2 else trail_dist / 1000
                     new_sl = (tick.bid - trail_dist) if pos.type == mt5.ORDER_TYPE_BUY else (tick.ask + trail_dist)
                 
-                # Only modify if new SL is better (Higher for Buy, Lower for Sell)
-                should_mod = False
-                if pos.type == mt5.ORDER_TYPE_BUY and new_sl > pos.sl: should_mod = True
-                if pos.type == mt5.ORDER_TYPE_SELL and (pos.sl == 0 or new_sl < pos.sl): should_mod = True
-                
-                if should_mod:
-                    print("Modified SL")
-                    modify_sl(pos.ticket, new_sl)
+                    # Only modify if new SL is better (Higher for Buy, Lower for Sell)
+                    should_mod = False
+                    if pos.type == mt5.ORDER_TYPE_BUY and new_sl > pos.sl: should_mod = True
+                    if pos.type == mt5.ORDER_TYPE_SELL and (pos.sl == 0 or new_sl < pos.sl): should_mod = True
+                    
+                    if should_mod:
+                        print("Modified SL")
+                        modify_sl(pos.ticket, new_sl)
 
         # -----------------------------------------------------------
         # ENTRY LOGIC
