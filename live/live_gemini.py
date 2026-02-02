@@ -1,3 +1,4 @@
+import argparse
 import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
@@ -19,7 +20,7 @@ LOGIN = int(os.environ["ACCOUNT_ID"])
 PASSWORD = os.environ["PASSWORD"]
 SERVER = os.environ["SERVER"]
 
-SYMBOL = "GBPUSD"  # Update for your broker (e.g., DE40, DAX40)
+# symbol = "GBPUSD"  # Update for your broker (e.g., DE40, DAX40)
 VOLUME = 0.01      # Lot size
 DEVIATION = 10    # Slippage tolerance in points
 MAGIC_NUM = 1234569
@@ -87,18 +88,19 @@ class VelocityMonitor:
     Live implementation of the density/velocity logic.
     Uses a deque to track tick timestamps efficiently.
     """
-    def __init__(self, lookback_seconds=60):
+    def __init__(self, symbol, lookback_seconds=60):
+        self.symbol = symbol
         self.tick_timestamps = deque()
         self.density_history = deque(maxlen=lookback_seconds)
         self.last_update = t_mod.time()
 
     def get_server_timestamp(self):
-        tick = mt5.symbol_info_tick(SYMBOL)
+        tick = mt5.symbol_info_tick(self.symbol)
 
         return tick.time_msc / 1000
 
     def get_ticks(self, server_time=None):
-        ticks = mt5.copy_ticks_from(SYMBOL, server_time, 10000, mt5.COPY_TICKS_ALL)
+        ticks = mt5.copy_ticks_from(self.symbol, server_time, 10000, mt5.COPY_TICKS_ALL)
         return ticks[1:]
     
     def get_tick_timestamps(self, server_time=None):
@@ -208,31 +210,31 @@ def get_server_timezone(year=None, month=None, day=None):
     server_time = now_utc + timedelta(hours=offset_hours)
     return zone
 
-def get_server_time():
+def get_server_time(symbol):
         utc_now = datetime.now(UTC)
         # Error: remove hardcodded hours, should be dynamic
-        tick = mt5.symbol_info_tick(SYMBOL)
+        tick = mt5.symbol_info_tick(symbol)
         server_time = datetime.fromtimestamp(tick.time)
         zone = get_server_timezone()
         server_time = zone.localize(server_time)
 
         return server_time
 
-def get_server_time_cet():
+def get_server_time_cet(symbol):
     """Gets MT5 server time and converts to CET."""
     # Note: MT5 Usually returns time in Broker Time. 
     # We assume Broker Time is aligned with EU markets or we convert.
     # For safety, we trust the broker's current time struct.
-    server_time = get_server_time()
+    server_time = get_server_time(symbol)
     return server_time.astimezone(CET)
 
-def calculate_daily_bias():
+def calculate_daily_bias(symbol):
     """
     Calculates bias based on YESTERDAY'S D1 Candle.
     (c - l) / (h - l)
     """
     # Get 2 days of D1 data to ensure we have yesterday completed
-    rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_D1, 1, 1)
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 1, 1)
     if rates is None or len(rates) == 0:
         print("Error fetching D1 data for Bias")
         return "straddle"
@@ -250,7 +252,7 @@ def calculate_daily_bias():
         return "sell"
     return "straddle"
 
-def get_ghost_range(today_date):
+def get_ghost_range(symbol, today_date):
     """
     Fetches M1 bars from CET to determine range.
     """
@@ -260,11 +262,18 @@ def get_ghost_range(today_date):
     
     # We need to localize these to get correct UTC query for MT5
     # Assuming the machine is running in correct TZ or using timezone aware objects
-    tz = CET
-    start_dt = tz.localize(start_dt)
-    end_dt = tz.localize(end_dt)
+    # tz = CET
+    # start_dt = tz.localize(start_dt)
+    # end_dt = tz.localize(end_dt)
+    zones = {
+        UTC2: 2,
+        UTC3: 3,
+    }
+    server_zone = get_server_timezone()
+    start_dt = start_dt + timedelta(hours=zones[server_zone])
+    end_dt   = end_dt   + timedelta(hours=zones[server_zone])
 
-    rates = mt5.copy_rates_range(SYMBOL, mt5.TIMEFRAME_M1, start_dt, end_dt)
+    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, end_dt)
     if rates is None or len(rates) == 0:
         return None, None
 
@@ -280,8 +289,8 @@ def get_filling_type(symbol):
         return None
     
     # Check bitmask for allowed modes
-    # SYMBOL_FILLING_FOK = 1
-    # SYMBOL_FILLING_IOC = 2
+    # symbol_FILLING_FOK = 1
+    # symbol_FILLING_IOC = 2
     if info.filling_mode & 1:
         return mt5.ORDER_FILLING_FOK
     elif info.filling_mode & 2:
@@ -290,20 +299,20 @@ def get_filling_type(symbol):
         # Default for Market Execution symbols
         return mt5.ORDER_FILLING_RETURN
 
-def execute_trade(direction, sl_pips):
+def execute_trade(symbol, direction, sl_pips):
     """Sends order to MT5"""
-    tick = mt5.symbol_info_tick(SYMBOL)
-    info = mt5.symbol_info(SYMBOL)
+    tick = mt5.symbol_info_tick(symbol)
+    info = mt5.symbol_info(symbol)
     point = info.point
     points_per_pip = 0.01 if info.digits in [5] else 1
     pip_value = point * points_per_pip
-    filling = get_filling_type(SYMBOL)
+    filling = get_filling_type(symbol)
 
     sl_points = sl_pips if info.trade_calc_mode == 2 else sl_pips / 1000
     
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": SYMBOL,
+        "symbol": symbol,
         "volume": VOLUME,
         "type": mt5.ORDER_TYPE_BUY if direction == 'buy' else mt5.ORDER_TYPE_SELL,
         "price": tick.ask if direction == 'buy' else tick.bid, # Error: Might need to add padding as broker might not allow entry close to current price
@@ -323,15 +332,15 @@ def execute_trade(direction, sl_pips):
     print(f"Trade Executed: {direction} at {result.price}")
     return True, result.price
 
-def close_position():
+def close_position(symbol):
     """Closes all positions with our Magic Number"""
-    positions = mt5.positions_get(symbol=SYMBOL)
+    positions = mt5.positions_get(symbol)
     for pos in positions:
         if pos.magic == MAGIC_NUM:
-            tick = mt5.symbol_info_tick(SYMBOL)
+            tick = mt5.symbol_info_tick(symbol)
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": SYMBOL,
+                "symbol": symbol,
                 "volume": pos.volume,
                 "type": mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY,
                 "position": pos.ticket,
@@ -343,10 +352,10 @@ def close_position():
             mt5.order_send(request)
             print("Mandatory Close Executed")
 
-def modify_sl(ticket, new_sl):
+def modify_sl(symbol, ticket, new_sl):
     request = {
         "action": mt5.TRADE_ACTION_SLTP,
-        "symbol": SYMBOL,
+        "symbol": symbol,
         "position": ticket,
         "sl": new_sl,
         "magic": MAGIC_NUM
@@ -362,6 +371,14 @@ def modify_sl(ticket, new_sl):
 # -------------------------------------------------------------------
 
 def main():
+    parser = argparse.ArgumentParser(description="Live trading momentum based bot for HFM")
+
+    parser.add_argument("symbol", help="symbol to be traded")
+
+    args = parser.parse_args()
+
+    symbol = args.symbol.strip().upper()
+
     if not mt5.initialize():
         err = mt5.last_error()
         print(f"MT5 terminal initialization failed: {err}")
@@ -373,15 +390,15 @@ def main():
         mt5.shutdown()
         raise PermissionError(f"MT5 login failed: {err}")
 
-    # Check Symbol
-    if not mt5.symbol_select(SYMBOL, True):
-        print(f"Symbol {SYMBOL} not found")
+    # Check symbol
+    if not mt5.symbol_select(symbol, True):
+        print(f"symbol {symbol} not found")
         return
 
     state = StrategyState()
-    velocity = VelocityMonitor(lookback_seconds=CONFIG['entry_conditions']['lookback_period'])
+    velocity = VelocityMonitor(symbol, lookback_seconds=CONFIG['entry_conditions']['lookback_period'])
     
-    print(f"Live Trading Started on {SYMBOL}...")
+    print(f"Live Trading Started on {symbol}...")
     
     last_update_seconds = t_mod.time()
 
@@ -390,8 +407,8 @@ def main():
         t_mod.sleep(0.1) 
         
         # 2. Update Time
-        now = get_server_time()
-        now_cet = get_server_time_cet()
+        now = get_server_time(symbol)
+        now_cet = get_server_time_cet(symbol)
         today_date = now.date()
 
         # session_start = time(CONFIG['session']['start_hour'], CONFIG['session']['start_minute'])
@@ -412,11 +429,11 @@ def main():
         # 3. New Day Logic
         if state.current_date != today_date:
             state.reset(today_date)
-            state.bias = calculate_daily_bias()
+            state.bias = calculate_daily_bias(symbol)
             print(f"Daily Bias Calculated: {state.bias}")
 
         # 4. Data Processing (Tick)
-        tick = mt5.symbol_info_tick(SYMBOL)
+        tick = mt5.symbol_info_tick(symbol)
         if tick is None: continue
         
         velocity.on_tick()
@@ -435,7 +452,7 @@ def main():
         # A. Capture Ghost Range (Runs once after 08:15)
         if state.ghost_high is None:
             if now_cet.time() > CONFIG['session']['ghost_end']:
-                g_min, g_max = get_ghost_range(today_date)
+                g_min, g_max = get_ghost_range(symbol, today_date)
                 if g_min:
                     state.ghost_low = g_min
                     state.ghost_high = g_max
@@ -455,7 +472,7 @@ def main():
                 print(f"Market Open Price Recorded: {state.daily_open_price}")
 
         # C. Check for existing positions (Recovery/Management)
-        positions = mt5.positions_get(symbol=SYMBOL)
+        positions = mt5.positions_get(symbol=symbol)
         my_pos = [p for p in positions if p.magic == MAGIC_NUM]
         state.in_trade = len(my_pos) > 0
         
@@ -469,15 +486,15 @@ def main():
             close_time = time(CONFIG['session']['end_hour'], CONFIG['session']['end_minute'])
             if now_cet.time() >= close_time:
                 print("CLosing all Positions")
-                close_position()
+                close_position(symbol)
                 state.in_trade = False
                 continue
 
             # Trailing Stop Logic
             current_profit_points = (tick.bid - pos.price_open) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - tick.ask)
             # Adjust for point value
-            point = mt5.symbol_info(SYMBOL).point
-            info = mt5.symbol_info(SYMBOL)
+            point = mt5.symbol_info(symbol).point
+            info = mt5.symbol_info(symbol)
             current_profit_points = current_profit_points if info.trade_calc_mode == 2 else current_profit_points * 1000 * 100
             # current_profit_points *= point #in pips
             # print(current_profit_points)
@@ -505,7 +522,7 @@ def main():
                     pass
                 else:
                     trail_dist = state.max_pnl * best_retention
-                    info = mt5.symbol_info(SYMBOL)
+                    info = mt5.symbol_info(symbol)
                     trail_dist = trail_dist if info.trade_calc_mode == 2 else trail_dist / 1000 /100
                     print(f"{trail_dist=}")
                     new_sl = (tick.bid - trail_dist) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - trail_dist)
@@ -520,7 +537,7 @@ def main():
                     
                     if should_mod:
                         print("Modified SL")
-                        modify_sl(pos.ticket, new_sl)
+                        modify_sl(symbol, pos.ticket, new_sl)
 
         # -----------------------------------------------------------
         # ENTRY LOGIC
@@ -553,7 +570,7 @@ def main():
                                 if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']):
                                     print(f"Entering Buy")
                                     # continue
-                                    success, price = execute_trade('buy', CONFIG['risk_management']['initial_sl'])
+                                    success, price = execute_trade(symbol, 'buy', CONFIG['risk_management']['initial_sl'])
                                     if success:
                                         state.in_trade = True
                                         state.entry_price = price
@@ -575,7 +592,7 @@ def main():
                                     print(f"Entering Sell")
                                     print(tick)
                                     # continue
-                                    success, price = execute_trade('sell', CONFIG['risk_management']['initial_sl'])
+                                    success, price = execute_trade(symbol, 'sell', CONFIG['risk_management']['initial_sl'])
                                     if success:
                                         state.in_trade = True
                                         state.entry_price = price
