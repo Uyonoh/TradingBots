@@ -483,6 +483,7 @@ def main():
             # print(current_profit_points)
             
             state.max_pnl = max(state.max_pnl, current_profit_points)
+            print(f"{state.max_pnl}")
             
             # Check Stages
             best_retention = 0.0
@@ -495,7 +496,7 @@ def main():
             
             if triggered:
                 # Calculate new SL
-                # print(best_retention)
+                print(f"{best_retention=}")
                 if best_retention == -1:
                     # Error: should set to original sl
                      # Break even + 1 point
@@ -505,8 +506,12 @@ def main():
                 else:
                     trail_dist = state.max_pnl * best_retention
                     info = mt5.symbol_info(SYMBOL)
-                    trail_dist = trail_dist if info.trade_calc_mode == 2 else trail_dist / 1000
-                    new_sl = (tick.bid - trail_dist) if pos.type == mt5.ORDER_TYPE_BUY else (tick.ask + trail_dist)
+                    trail_dist = trail_dist if info.trade_calc_mode == 2 else trail_dist / 1000 /100
+                    print(f"{trail_dist=}")
+                    new_sl = (tick.bid - trail_dist) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - trail_dist)
+                    print(f"{pos.sl=}")
+                    print(f"{new_sl=}")
+                    print(f"SL: LS {new_sl < pos.sl}")
                 
                     # Only modify if new SL is better (Higher for Buy, Lower for Sell)
                     should_mod = False
