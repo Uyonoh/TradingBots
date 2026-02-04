@@ -313,6 +313,7 @@ def process_chunk_parallel(year, month, config):
     # This is where the magic happens for performance
     server_idx = df.index.tz_convert(zone)
     date_times = server_idx.astype(int)
+    times = df.index.tz_convert(zone).tz_localize(None).values
     dates = server_idx.date # Dates must be server dates
     bids = df['bid'].values
     asks = df['ask'].values
@@ -348,7 +349,7 @@ def process_chunk_parallel(year, month, config):
     
     for i in range(len(mids)):
         curr_date = dates[i]
-        curr_time = date_times[i]
+        curr_time = times[i]
         curr_mid = mids[i]
         curr_bid = bids[i]
         curr_ask = asks[i]
@@ -419,7 +420,13 @@ def process_chunk_parallel(year, month, config):
 
                 in_trade = False
                 touched_opposite = False
-                #day_traded = curr_date
+                # if bias_str == "buy":
+                #     g_low = (g_low + curr_bid) / 2
+                #     g_high = (g_high + curr_bid) / 2
+                # else:
+                #     g_low = (g_low  + curr_ask) / 2
+                #     g_high = (g_high  + curr_ask) / 2
+                # day_traded = curr_date
                 continue
                 
         # ENTRY LOGIC
@@ -436,7 +443,7 @@ def process_chunk_parallel(year, month, config):
                 
                 if touched_opposite and curr_bid <= g_low + (buffer / contract_size) and velocity_signals[i] and curr_bid < daily_opens[curr_date]:
                     in_trade, direction, entry_p, entry_t, max_pnl = True, 'sell', curr_ask, curr_time, 0.0
-                    # print("Entered sell")
+                    print(f"Entered sell: {entry_p, entry_t}")
                     # print(df.iloc[[i]])
 
     return trades
@@ -762,7 +769,7 @@ if __name__ == "__main__":
     else:
         engine = DAXTickEngine(PRO_SETUP)
         # Example: Run for 2025
-        results = engine.run_backtest(2026, 1, 2026, 2)
+        results = engine.run_backtest(2025, 1, 2026, 2)
         
         if not results.empty:
             results = calculate_equity(results)

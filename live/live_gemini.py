@@ -19,6 +19,8 @@ dotenv.load_dotenv()
 LOGIN = int(os.environ["ACCOUNT_ID"])
 PASSWORD = os.environ["PASSWORD"]
 SERVER = os.environ["SERVER"]
+MAX_RETRIES = 5
+TIMEOUT = 1
 
 # symbol = "GBPUSD"  # Update for your broker (e.g., DE40, DAX40)
 VOLUME = 0.01      # Lot size
@@ -95,9 +97,21 @@ class VelocityMonitor:
         self.last_update = t_mod.time()
 
     def get_server_timestamp(self):
-        tick = mt5.symbol_info_tick(self.symbol)
-
-        return tick.time_msc / 1000
+        for attempt in range(MAX_RETRIES + 1):
+            tick = mt5.symbol_info_tick(self.symbol)
+            
+            if tick is not None:
+                return tick.time_msc / 1000 # Returning MS is better for high-frequency
+                
+            if attempt < MAX_RETRIES:
+                # Exponential backoff or simple delay
+                print(f"Retry {attempt + 1}/{MAX_RETRIES} for {self.symbol}...")
+                time.sleep(0.1 * (attempt + 1)) 
+            else:
+                print(f"Failed to get tick for {self.symbol} after {MAX_RETRIES} retries.")
+                
+        return None
+            
 
     def get_ticks(self, server_time=None):
         ticks = mt5.copy_ticks_from(self.symbol, server_time, 10000, mt5.COPY_TICKS_ALL)
@@ -169,6 +183,12 @@ class StrategyState:
         self.touched_opposite = False
         self.in_trade = False
         self.max_pnl = 0.0
+    
+    def close_trade(self):
+        print(f"{self.bias} trade closed")
+        self.touched_opposite = False
+        self.in_trade = False
+        self.max_pnl = 0.0
 
 # -------------------------------------------------------------------
 # CORE LOGIC
@@ -215,7 +235,8 @@ def get_server_time(symbol):
         utc_now = datetime.now(UTC)
         # Error: remove hardcodded hours, should be dynamic
         tick = mt5.symbol_info_tick(symbol)
-        server_time = datetime.fromtimestamp(tick.time)
+        # server_time = datetime.fromtimestamp(tick.time)
+        server_time = pd.to_datetime(tick.time, unit='s')
         zone = get_server_timezone()
         server_time = zone.localize(server_time)
 
@@ -458,6 +479,8 @@ def main():
         now = get_server_time(symbol)
         now_cet = get_server_time_cet(symbol)
         today_date = now.date()
+        # print(f"{now=}")
+        # print(f"{now_cet=}")
 
         # session_start = time(CONFIG['session']['start_hour'], CONFIG['session']['start_minute'])
         # session_end = time(CONFIG['session']['end_hour'], CONFIG['session']['end_minute'])
@@ -523,7 +546,17 @@ def main():
         # C. Check for existing positions (Recovery/Management)
         positions = mt5.positions_get(symbol=symbol)
         my_pos = [p for p in positions if p.magic == MAGIC_NUM]
-        state.in_trade = len(my_pos) > 0
+        open_pos = len(my_pos) > 0
+
+        # Reset trade metrics
+        if state.in_trade and not open_pos:
+            state.close_trade()
+        elif not state.in_trade and len(my_pos) > 1:
+            print("Unknown position open: ")
+            for p in my_pos:
+                print(p)
+
+        state.in_trade = open_pos
         
         # -----------------------------------------------------------
         # EXIT / RISK MANAGEMENT LOGIC
@@ -534,6 +567,7 @@ def main():
             # Mandatory Close (Time)
             close_time = time(CONFIG['session']['end_hour'], CONFIG['session']['end_minute'])
             if now_cet.time() >= close_time:
+                print(f"{now_cet.time()} -> {close_time}")
                 print("CLosing all Positions")
                 close_position(symbol)
                 state.in_trade = False
@@ -596,7 +630,7 @@ def main():
                 if state.bias == 'buy':
                     # 1. Touch Opposite (Trap)
                     target = state.ghost_low + buffer
-                    if tick.ask <= target or touched_opposite(symbol, state.bias, target):
+                    if tick.ask <= target:
                         if not state.touched_opposite:
                             print("Trap: Touched Opposite Low (Buy Setup)")
                             state.touched_opposite = True
@@ -621,7 +655,7 @@ def main():
                 elif state.bias == 'sell':
                     # 1. Touch Opposite (Trap)
                     target = state.ghost_high - buffer
-                    if tick.bid >= target or touched_opposite(symbol, state.bias, target):
+                    if tick.bid >= target:
                         if not state.touched_opposite:
                             print("Trap: Touched Opposite High (Sell Setup)")
                             state.touched_opposite = True
