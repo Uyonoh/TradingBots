@@ -292,7 +292,7 @@ def process_chunk_parallel(year, month, config):
     Worker function for parallel execution.
     Handles data loading and the high-speed tick loop.
     """
-    path = Path(f"./tick_data/{SYMBOL}_{year}_{month:02d}.parquet")
+    path = Path(f"./tick_data/{SYMBOL}/{SYMBOL}_{year}_{month:02d}.parquet")
     if not path.exists(): 
         print(f"File not found: {path}")
         return []

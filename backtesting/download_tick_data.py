@@ -104,7 +104,7 @@ class DAXTickDataLoader:
             month_end = min(month_end, end_date)
             print(f"Processing {current.date()} to {month_end.date()}")
             year, month = current.year, current.month
-            path = self.data_dir / f"{self.symbol}_{year}_{month:02d}.parquet"
+            path = self.data_dir / self.symbol / f"{self.symbol}_{year}_{month:02d}.parquet"
 
             if not os.path.exists(path):
                 df = self.fetch_ticks_chunk(current, month_end)
