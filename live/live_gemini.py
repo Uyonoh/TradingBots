@@ -134,7 +134,8 @@ class VelocityMonitor:
         self.density_history.append(current_density)
 
     def is_high_velocity(self, multiplier):
-        if len(self.density_history) < 1: return False
+        if len(self.density_history) < 10: return False
+        if t_mod.time() - self.last_update < 60 * 10: return False
         
         current_density = len(self.tick_timestamps) / 30.0
         avg_density = sum(self.density_history) / len(self.density_history)
@@ -252,6 +253,35 @@ def calculate_daily_bias(symbol):
         return "sell"
     return "straddle"
 
+def touched_opposite(symbol, bias, target):
+    today = datetime.now()
+    start_dt = datetime.combine(today, CONFIG['session']['day_open'])
+    end_dt = today
+
+    zones = {
+        UTC2: 2,
+        UTC3: 3,
+    }
+    server_zone = get_server_timezone()
+    start_dt = start_dt + timedelta(hours=zones[server_zone])
+    end_dt   = end_dt   + timedelta(hours=zones[server_zone])
+
+    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, end_dt)
+    if rates is None or len(rates) == 0:
+        print("Error fetching M1 data for opposite confirmation")
+        return False
+
+    for r in rates:
+        high, low, close = r['high'], r['low'], r['close']
+
+        if bias == "buy":
+            if low <= target:
+                return True
+        else:
+            if high >= target:
+                return True
+    return False
+
 def get_ghost_range(symbol, today_date):
     """
     Fetches M1 bars from CET to determine range.
@@ -283,6 +313,27 @@ def get_ghost_range(symbol, today_date):
     
     return g_min, g_max
 
+def get_frankfurt_open(symbol, today_date):
+    """
+    Fetches M1 bars open price.
+    """
+    
+    start_dt = datetime.combine(today_date, CONFIG['session']['day_open'])
+
+    zones = {
+        UTC2: 2,
+        UTC3: 3,
+    }
+    server_zone = get_server_timezone()
+    start_dt = start_dt + timedelta(hours=zones[server_zone])
+
+    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, start_dt)
+    if rates is None or len(rates) == 0:
+        return None
+    open_price = rates[0][1]
+
+    return open_price
+
 def get_filling_type(symbol):
     info = mt5.symbol_info(symbol)
     if info is None:
@@ -299,16 +350,12 @@ def get_filling_type(symbol):
         # Default for Market Execution symbols
         return mt5.ORDER_FILLING_RETURN
 
-def execute_trade(symbol, direction, sl_pips):
+def execute_trade(symbol, contract_size, direction, sl_pips):
     """Sends order to MT5"""
     tick = mt5.symbol_info_tick(symbol)
-    info = mt5.symbol_info(symbol)
-    point = info.point
-    points_per_pip = 0.01 if info.digits in [5] else 1
-    pip_value = point * points_per_pip
     filling = get_filling_type(symbol)
 
-    sl_points = sl_pips if info.trade_calc_mode == 2 else sl_pips / 1000
+    sl_points = sl_pips / contract_size
     
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -397,6 +444,7 @@ def main():
 
     state = StrategyState()
     velocity = VelocityMonitor(symbol, lookback_seconds=CONFIG['entry_conditions']['lookback_period'])
+    contract_size = mt5.symbol_info(symbol).trade_contract_size
     
     print(f"Live Trading Started on {symbol}...")
     
@@ -441,11 +489,12 @@ def main():
         
         # Update Velocity History every 1 second
         if t_mod.time() - last_update_seconds >= 1.0:
+            avg_vel = sum(velocity.density_history)  / max(len(velocity.density_history), 1) #prevent division by zero
             velocity.update_history()
             last_update_seconds = t_mod.time()
 
             if (datetime.now().time().minute % 5 == 0) and (datetime.now().time().second == 0):
-                print(f"Tick velosity density at {datetime.now().time()}: {velocity.density_history[-1]}")
+                print(f"Tick velosity density at {datetime.now().time()}: {velocity.density_history[-1]} || AVG: {avg_vel}")
 
         # 5. Logic Gates
         
@@ -467,8 +516,8 @@ def main():
             # If it is 09:00 or later
             target_open = CONFIG['session']['day_open']
             if now_cet.time() >= target_open:
-                # Error: might need to use assk/bid based on sell/buy
-                state.daily_open_price = tick.ask if state.bias == "buy" else tick.bid # Approximate open with current Ask
+                # Error: add error handling
+                state.daily_open_price = get_frankfurt_open(symbol, today_date) #tick.ask if state.bias == "buy" else tick.bid # Approximate open with current Ask
                 print(f"Market Open Price Recorded: {state.daily_open_price}")
 
         # C. Check for existing positions (Recovery/Management)
@@ -493,14 +542,12 @@ def main():
             # Trailing Stop Logic
             current_profit_points = (tick.bid - pos.price_open) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - tick.ask)
             # Adjust for point value
-            point = mt5.symbol_info(symbol).point
-            info = mt5.symbol_info(symbol)
-            current_profit_points = current_profit_points if info.trade_calc_mode == 2 else current_profit_points * 1000 * 100
-            # current_profit_points *= point #in pips
-            # print(current_profit_points)
+            current_profit_points *= contract_size # in pips
+            
+            if current_profit_points > state.max_pnl:
+                print(f"Max profit pips: {state.max_pnl} -> {current_profit_points}")
             
             state.max_pnl = max(state.max_pnl, current_profit_points)
-            print(f"{state.max_pnl}")
             
             # Check Stages
             best_retention = 0.0
@@ -513,30 +560,22 @@ def main():
             
             if triggered:
                 # Calculate new SL
-                print(f"{best_retention=}")
+                # print(f"{best_retention=}")
                 if best_retention == -1:
-                    # Error: should set to original sl
-                     # Break even + 1 point
-                    # sl = CONFIG['risk_management']['initial_sl']
-                    # new_sl = pos.price_open + (1.0 * point) if pos.type == mt5.ORDER_TYPE_BUY else pos.price_open - (1.0 * point)
+                    # Leave sl at original
                     pass
                 else:
                     trail_dist = state.max_pnl * best_retention
-                    info = mt5.symbol_info(symbol)
-                    trail_dist = trail_dist if info.trade_calc_mode == 2 else trail_dist / 1000 /100
-                    print(f"{trail_dist=}")
-                    new_sl = (tick.bid - trail_dist) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - trail_dist)
-                    print(f"{pos.sl=}")
-                    print(f"{new_sl=}")
-                    print(f"SL: LS {new_sl < pos.sl}")
+                    trail_dist /= contract_size
+                    new_sl = (tick.bid + trail_dist) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - trail_dist)
                 
                     # Only modify if new SL is better (Higher for Buy, Lower for Sell)
                     should_mod = False
-                    if pos.type == mt5.ORDER_TYPE_BUY and new_sl > pos.sl: should_mod = True
+                    if pos.type == mt5.ORDER_TYPE_BUY and (pos.sl == 0 or new_sl > pos.sl): should_mod = True
                     if pos.type == mt5.ORDER_TYPE_SELL and (pos.sl == 0 or new_sl < pos.sl): should_mod = True
                     
                     if should_mod:
-                        print("Modified SL")
+                        print(f"Modified SL: {pos.sl} => {new_sl}")
                         modify_sl(symbol, pos.ticket, new_sl)
 
         # -----------------------------------------------------------
@@ -551,11 +590,13 @@ def main():
             if start_t <= now_cet.time() < end_t:
                 
                 buffer = CONFIG['entry_conditions']['15min_buffer']
+                buffer /= contract_size
                 
                 # BUY LOGIC
                 if state.bias == 'buy':
                     # 1. Touch Opposite (Trap)
-                    if tick.ask <= state.ghost_low + buffer:
+                    target = state.ghost_low + buffer
+                    if tick.ask <= target or touched_opposite(symbol, state.bias, target):
                         if not state.touched_opposite:
                             print("Trap: Touched Opposite Low (Buy Setup)")
                             state.touched_opposite = True
@@ -570,7 +611,7 @@ def main():
                                 if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']):
                                     print(f"Entering Buy")
                                     # continue
-                                    success, price = execute_trade(symbol, 'buy', CONFIG['risk_management']['initial_sl'])
+                                    success, price = execute_trade(symbol, contract_size, 'buy', CONFIG['risk_management']['initial_sl'])
                                     if success:
                                         state.in_trade = True
                                         state.entry_price = price
@@ -579,7 +620,8 @@ def main():
                 # SELL LOGIC
                 elif state.bias == 'sell':
                     # 1. Touch Opposite (Trap)
-                    if tick.bid >= state.ghost_high - buffer:
+                    target = state.ghost_high - buffer
+                    if tick.bid >= target or touched_opposite(symbol, state.bias, target):
                         if not state.touched_opposite:
                             print("Trap: Touched Opposite High (Sell Setup)")
                             state.touched_opposite = True
@@ -590,9 +632,8 @@ def main():
                             if tick.bid < state.daily_open_price:
                                 if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']):
                                     print(f"Entering Sell")
-                                    print(tick)
                                     # continue
-                                    success, price = execute_trade(symbol, 'sell', CONFIG['risk_management']['initial_sl'])
+                                    success, price = execute_trade(symbol, contract_size, 'sell', CONFIG['risk_management']['initial_sl'])
                                     if success:
                                         state.in_trade = True
                                         state.entry_price = price
