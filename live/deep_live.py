@@ -14,7 +14,7 @@ import logging.handlers
 import signal
 import sys
 from typing import Optional, Dict, Any, List, Tuple, Callable, Union
-from functools import wraps
+from functools import wraps, lru_cache
 from dataclasses import dataclass
 from enum import Enum
 
@@ -63,13 +63,6 @@ def retry(
 ):
     """
     Retry decorator with exponential backoff.
-    
-    Args:
-        max_attempts: Maximum number of attempts
-        delay: Initial delay between attempts in seconds
-        backoff: Multiplier for delay after each attempt
-        exceptions: Exceptions to catch and retry on
-        logger: Logger instance for logging retries
     """
     def decorator(func: Callable):
         @wraps(func)
@@ -95,6 +88,153 @@ def retry(
     return decorator
 
 # -------------------------------------------------------------------
+# TIME OPTIMIZATION UTILITIES
+# -------------------------------------------------------------------
+class TimeCache:
+    """Caches time-related computations to avoid repeated calculations."""
+    
+    _timezone_cache: Dict[date, pytz.tzinfo] = {}
+    _last_timezone_update: Optional[datetime] = None
+    _timezone_cache_ttl: int = 3600  # 1 hour
+    
+    @classmethod
+    def clear_timezone_cache(cls):
+        """Clear timezone cache."""
+        cls._timezone_cache.clear()
+        cls._last_timezone_update = None
+    
+    @classmethod
+    def get_timezone(cls, for_date: Optional[date] = None) -> pytz.tzinfo:
+        """Get timezone with caching."""
+        if for_date is None:
+            for_date = datetime.now().date()
+        
+        # Check cache
+        if for_date in cls._timezone_cache:
+            return cls._timezone_cache[for_date]
+        
+        # Calculate and cache
+        timezone = cls._calculate_timezone(for_date)
+        cls._timezone_cache[for_date] = timezone
+        
+        # Clean old cache entries (older than 30 days)
+        today = datetime.now().date()
+        old_dates = [d for d in cls._timezone_cache.keys() 
+                    if (today - d).days > 30]
+        for d in old_dates:
+            del cls._timezone_cache[d]
+        
+        return timezone
+    
+    @staticmethod
+    def _calculate_timezone(for_date: date) -> pytz.tzinfo:
+        """Calculate timezone for a specific date."""
+        # Helper to find the last Sunday of a given month
+        def last_sunday(year: int, month: int) -> datetime:
+            last_day = calendar.monthrange(year, month)[1]
+            dt = datetime(year, month, last_day, tzinfo=timezone.utc)
+            offset = (dt.weekday() + 1) % 7  # Weekday 6 is Sunday
+            return dt - timedelta(days=offset)
+        
+        # DST boundaries
+        dst_start = last_sunday(for_date.year, 3).replace(hour=1)
+        dst_end = last_sunday(for_date.year, 10).replace(hour=1)
+        
+        # Create datetime for timezone determination
+        dt = datetime(for_date.year, for_date.month, for_date.day, 12, 0, 0, tzinfo=timezone.utc)
+        
+        # Determine offset
+        if dst_start <= dt < dst_end:
+            return pytz.timezone('Asia/Baghdad')  # UTC+3
+        else:
+            return pytz.timezone('Europe/Athens')  # UTC+2
+
+
+class DateTimeUtils:
+    """Optimized datetime utilities with caching."""
+    
+    # Timezone constants
+    CET = pytz.timezone('Europe/Berlin')
+    UTC = pytz.utc
+    
+    @staticmethod
+    @lru_cache(maxsize=128)
+    def combine_date_time(base_date: date, time_obj: time, tz: pytz.tzinfo) -> datetime:
+        """Combine date and time with timezone (cached)."""
+        dt = datetime.combine(base_date, time_obj)
+        return tz.localize(dt) if dt.tzinfo is None else dt.astimezone(tz)
+    
+    @staticmethod
+    def now_in_timezone(tz: pytz.tzinfo) -> datetime:
+        """Get current time in specified timezone."""
+        return datetime.now(timezone.utc).astimezone(tz)
+    
+    @staticmethod
+    def is_time_in_range(check_time: time, start_time: time, end_time: time) -> bool:
+        """Check if a time is within range (handles overnight ranges)."""
+        if start_time <= end_time:
+            return start_time <= check_time < end_time
+        else:
+            # Overnight range (e.g., 22:00 to 02:00)
+            return check_time >= start_time or check_time < end_time
+
+
+class SessionTimeManager:
+    """Manages and caches session time calculations."""
+    
+    def __init__(self, config: Dict[str, Any], symbol: str, logger: logging.Logger):
+        self.config = config
+        self.symbol = symbol
+        self.logger = logger
+        
+        # Cache structures
+        self._cached_session_times: Dict[date, Dict[str, datetime]] = {}
+        self._current_date: Optional[date] = None
+        self._current_times: Optional[Dict[str, datetime]] = None
+        
+    def get_session_times(self, for_date: date) -> Dict[str, datetime]:
+        """Get session times for a specific date (cached)."""
+        if for_date != self._current_date or self._current_times is None:
+            self._current_date = for_date
+            self._current_times = self._calculate_session_times(for_date)
+        
+        return self._current_times
+    
+    def _calculate_session_times(self, for_date: date) -> Dict[str, datetime]:
+        """Calculate session times for a date."""
+        server_tz = TimeCache.get_timezone(for_date)
+        
+        # Helper function to create localized datetime
+        def make_dt(t: time) -> datetime:
+            return DateTimeUtils.combine_date_time(for_date, t, server_tz)
+        
+        session_config = self.config['session']
+        
+        return {
+            'day_open': make_dt(session_config['day_open']),
+            'ghost_start': make_dt(session_config['ghost_start']),
+            'ghost_end': make_dt(session_config['ghost_end']),
+            'session_start': make_dt(time(session_config['start_hour'], session_config['start_minute'])),
+            'session_end': make_dt(time(session_config['end_hour'], session_config['end_minute'])),
+        }
+    
+    def is_in_trading_hours(self, current_time: datetime) -> bool:
+        """Check if current time is within trading hours."""
+        session_times = self.get_session_times(current_time.date())
+        return session_times['session_start'] <= current_time < session_times['session_end']
+    
+    def should_check_ghost_range(self, current_time: datetime) -> bool:
+        """Check if we should check for ghost range."""
+        session_times = self.get_session_times(current_time.date())
+        return current_time > session_times['ghost_end']
+    
+    def should_check_market_open(self, current_time: datetime) -> bool:
+        """Check if we should check for market open."""
+        session_times = self.get_session_times(current_time.date())
+        return current_time >= session_times['day_open']
+
+
+# -------------------------------------------------------------------
 # CONNECTION MANAGER
 # -------------------------------------------------------------------
 class MT5ConnectionManager:
@@ -107,7 +247,7 @@ class MT5ConnectionManager:
         self.logger = logger
         self.connected = False
         self.last_connection_check = 0
-        self.connection_check_interval = 60  # Check every 60 seconds
+        self.connection_check_interval = 60
         
     def initialize(self) -> bool:
         """Initialize MT5 connection with retry logic."""
@@ -143,44 +283,32 @@ class MT5ConnectionManager:
         self.last_connection_check = current_time
         
         try:
-            # Simple check: try to get terminal info
             info = mt5.terminal_info()
-            if info is None:
-                self.logger.warning("MT5 connection check failed: terminal_info returned None")
-                self.connected = False
-            else:
-                self.connected = True
-                
-        except Exception as e:
-            self.logger.warning(f"MT5 connection check failed: {e}")
+            self.connected = info is not None
+            return self.connected
+        except Exception:
             self.connected = False
-        
-        return self.connected
+            return False
     
     def reconnect(self) -> bool:
         """Attempt to reconnect to MT5."""
         self.logger.warning("Attempting to reconnect to MT5...")
         
-        # Shutdown existing connection
         try:
             mt5.shutdown()
-            self.logger.debug("MT5 connection shutdown")
-        except Exception as e:
-            self.logger.debug(f"Error during shutdown (may be already disconnected): {e}")
+        except Exception:
+            pass
         
-        # Clear connection state
         self.connected = False
         
-        # Try to reconnect with retry logic
-        for attempt in range(1, 4):  # 3 attempts
+        for attempt in range(1, 4):
             self.logger.info(f"Reconnection attempt {attempt}/3...")
             if self.initialize():
                 self.logger.info("MT5 reconnection successful")
                 return True
             
             if attempt < 3:
-                wait_time = 5 * attempt  # 5, 10, 15 seconds
-                self.logger.info(f"Waiting {wait_time}s before next reconnection attempt...")
+                wait_time = 5 * attempt
                 t_mod.sleep(wait_time)
         
         self.logger.error("Failed to reconnect to MT5 after multiple attempts")
@@ -190,7 +318,6 @@ class MT5ConnectionManager:
         """Ensure MT5 connection is active, reconnecting if necessary."""
         if self.check_connection():
             return True
-        
         return self.reconnect()
     
     def shutdown(self):
@@ -213,27 +340,15 @@ class TradingLogger:
     def setup_logging(symbol: str, log_level: str = "INFO") -> logging.Logger:
         """
         Configure structured logging with console and file handlers.
-        
-        Args:
-            symbol: Trading symbol for log file naming
-            log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
-        
-        Returns:
-            Configured logger instance
         """
-        # Create logs directory if it doesn't exist
         log_dir = "logs"
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
         
-        # Create logger
         logger = logging.getLogger("trading_bot")
         logger.setLevel(getattr(logging, log_level.upper()))
-        
-        # Remove existing handlers to avoid duplicates
         logger.handlers.clear()
         
-        # Log format
         formatter = logging.Formatter(
             fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
@@ -249,22 +364,22 @@ class TradingLogger:
         log_file = os.path.join(log_dir, f"trading_{symbol}_{datetime.now().strftime('%Y%m%d')}.log")
         file_handler = logging.handlers.RotatingFileHandler(
             log_file,
-            maxBytes=10*1024*1024,  # 10 MB
+            maxBytes=10*1024*1024,
             backupCount=5
         )
         file_handler.setFormatter(formatter)
-        file_handler.setLevel(logging.INFO)  # File gets INFO and above
+        file_handler.setLevel(logging.INFO)
         logger.addHandler(file_handler)
         
-        # Separate error file handler
+        # Error file handler
         error_file = os.path.join(log_dir, f"errors_{symbol}_{datetime.now().strftime('%Y%m%d')}.log")
         error_handler = logging.handlers.RotatingFileHandler(
             error_file,
-            maxBytes=5*1024*1024,  # 5 MB
+            maxBytes=5*1024*1024,
             backupCount=10
         )
         error_handler.setFormatter(formatter)
-        error_handler.setLevel(logging.WARNING)  # Error file gets WARNING and above
+        error_handler.setLevel(logging.WARNING)
         logger.addHandler(error_handler)
         
         return logger
@@ -279,12 +394,6 @@ class ConfigValidator:
     def validate_config(config: Dict[str, Any]) -> List[str]:
         """
         Validate configuration and return list of errors.
-        
-        Args:
-            config: Configuration dictionary
-        
-        Returns:
-            List of validation error messages
         """
         errors = []
         
@@ -342,9 +451,6 @@ class ConfigValidator:
                     if stage['max_profit'] <= stage['min_profit']:
                         errors.append(f"Stage {i}: 'max_profit' must be greater than 'min_profit'")
                     last_max = stage['max_profit']
-                else:
-                    # Last stage doesn't need max_profit
-                    pass
         
         # Validate session times
         session = config.get('session', {})
@@ -355,7 +461,6 @@ class ConfigValidator:
             elif not isinstance(session[time_key], time):
                 errors.append(f"'session.{time_key}' must be a datetime.time object")
         
-        # Check ghost range validity
         if 'ghost_start' in session and 'ghost_end' in session:
             if session['ghost_start'] >= session['ghost_end']:
                 errors.append("'ghost_start' must be before 'ghost_end'")
@@ -376,7 +481,7 @@ VOLUME = 0.01
 DEVIATION = 10
 MAGIC_NUM = 1234569
 
-# Configuration - consolidated and cleaned
+# Configuration
 CONFIG = {
     'bias_filter': {
         'buy_threshold': 0.6, 
@@ -410,16 +515,16 @@ CONFIG = {
     'logging': {
         'level': 'INFO',
         'enable_file_logging': True
+    },
+    'performance': {
+        'tick_processing_interval': 0.1,  # seconds
+        'velocity_update_interval': 1.0,  # seconds
+        'position_check_interval': 2.0,   # seconds
+        'outside_session_sleep': 60.0     # seconds when outside trading hours
     }
 }
 
-# Timezones
-CET = pytz.timezone('Europe/Berlin')
-UTC = pytz.utc
-UTC2 = pytz.timezone('Europe/Athens')  # EET / CAT
-UTC3 = pytz.timezone('Asia/Baghdad')   # EAT / MST
-
-# Global instances (will be initialized in main)
+# Global instances
 logger = None
 connection_manager = None
 
@@ -451,121 +556,182 @@ class SignalHandler:
         return self.shutdown_requested
 
 # -------------------------------------------------------------------
-# HELPER CLASSES
+# OPTIMIZED VELOCITY MONITOR
 # -------------------------------------------------------------------
-
-class VelocityMonitor:
+class OptimizedVelocityMonitor:
     """
-    Live implementation of the density/velocity logic.
-    Uses a deque to track tick timestamps efficiently.
+    Optimized velocity monitor with efficient data structures and calculations.
     """
+    
     def __init__(self, symbol: str, lookback_seconds: int = 60):
         self.symbol = symbol
-        self.tick_timestamps = deque()
+        self.tick_timestamps = deque(maxlen=3000)  # Limit memory usage (100 ticks/second * 30 seconds)
         self.density_history = deque(maxlen=lookback_seconds)
+        self.density_sum = 0.0  # Running sum for quick average calculation
         self.last_update = t_mod.time()
+        self.last_tick_fetch = 0
+        self.tick_fetch_interval = 0.5  # Fetch ticks every 0.5 seconds
         self.logger = logging.getLogger("trading_bot.velocity")
+        
+        # Pre-allocate arrays for better performance
+        self._tick_buffer = np.zeros(10000, dtype=np.float64)
+        self._buffer_size = 0
 
-    @retry(max_attempts=3, delay=0.5, exceptions=(MT5OperationError,), logger=logger)
     def get_server_timestamp(self) -> Optional[float]:
-        """Get current server timestamp with retry logic."""
+        """Get current server timestamp efficiently."""
         tick = mt5.symbol_info_tick(self.symbol)
-        
-        if tick is None:
-            error = mt5.last_error()
-            raise MT5OperationError(f"Failed to get tick for {self.symbol}: {error}")
-        
-        return tick.time_msc / 1000  # Convert to seconds
+        return tick.time_msc / 1000 if tick is not None else None
 
-    @retry(max_attempts=2, delay=1.0, exceptions=(MT5OperationError,), logger=logger)
-    def get_ticks(self, server_time: Optional[float] = None) -> np.ndarray:
-        """Fetch ticks from MT5 with retry."""
+    def get_tick_timestamps_batch(self, server_time: Optional[float] = None) -> np.ndarray:
+        """Fetch ticks in batches for better performance."""
+        current_time = t_mod.time()
+        if current_time - self.last_tick_fetch < self.tick_fetch_interval:
+            return np.array([])
+        
+        self.last_tick_fetch = current_time
+        
         if server_time is None:
             server_time = self.get_server_timestamp()
+            if server_time is None:
+                return np.array([])
         
-        ticks = mt5.copy_ticks_from(self.symbol, server_time, 10000, mt5.COPY_TICKS_ALL)
+        # Use a larger batch size but limit frequency
+        ticks = mt5.copy_ticks_from(self.symbol, server_time, 5000, mt5.COPY_TICKS_ALL)
         if ticks is None or len(ticks) == 0:
-            raise MT5OperationError(f"No ticks returned for {self.symbol}")
-        return ticks
-
-    def get_tick_timestamps(self, server_time: Optional[float] = None) -> List[float]:
-        """Extract timestamps from ticks with error handling."""
-        try:
-            ticks = self.get_ticks(server_time)
-            return [t["time_msc"] / 1000 for t in ticks]
-        except MT5OperationError as e:
-            self.logger.warning(f"Failed to get tick timestamps: {e}")
-            return []
+            return np.array([])
+        
+        # Extract timestamps efficiently using numpy
+        timestamps = ticks['time_msc'] / 1000.0
+        return timestamps[1:] if len(timestamps) > 1 else timestamps
 
     def on_tick(self) -> None:
-        """Process new ticks and update timestamp deque."""
-        try:
-            now = self.get_server_timestamp()
-            if now is None:
-                return
-            
-            if len(self.tick_timestamps) == 0:
-                timestamps = self.get_tick_timestamps(now)
-            else:
-                last_timestamp = self.tick_timestamps[-1]
-                timestamps = self.get_tick_timestamps(last_timestamp)
-            
-            if timestamps:
-                self.tick_timestamps.extend(timestamps)
-                self.cleanup(now)
-                
-        except Exception as e:
-            self.logger.error(f"Error in on_tick: {e}")
+        """Process new ticks efficiently."""
+        now = self.get_server_timestamp()
+        if now is None:
+            return
+        
+        # Get new timestamps
+        if len(self.tick_timestamps) == 0:
+            timestamps = self.get_tick_timestamps_batch(now)
+        else:
+            timestamps = self.get_tick_timestamps_batch(self.tick_timestamps[-1])
+        
+        if len(timestamps) > 0:
+            # Use extend for efficiency
+            self.tick_timestamps.extend(timestamps)
+            self.cleanup(now)
 
     def cleanup(self, now: float) -> None:
-        """Remove ticks older than 30 seconds."""
+        """Remove old ticks efficiently."""
         cutoff = now - 30
+        # Remove from left until we find a timestamp >= cutoff
         while self.tick_timestamps and self.tick_timestamps[0] < cutoff:
             self.tick_timestamps.popleft()
 
     def update_history(self) -> None:
-        """Update density history once per second."""
-        try:
-            now = self.get_server_timestamp()
-            if now is None:
-                return
-                
-            self.cleanup(now)
-            current_density = len(self.tick_timestamps) / 30.0
-            self.density_history.append(current_density)
-            self.last_update = t_mod.time()
+        """Update density history with running sum optimization."""
+        now = self.get_server_timestamp()
+        if now is None:
+            return
             
-        except Exception as e:
-            self.logger.error(f"Error updating velocity history: {e}")
+        self.cleanup(now)
+        
+        current_density = len(self.tick_timestamps) / 30.0
+        
+        # Update running sum
+        if len(self.density_history) == self.density_history.maxlen:
+            # Remove oldest from sum
+            self.density_sum -= self.density_history[0]
+        
+        self.density_history.append(current_density)
+        self.density_sum += current_density
+        self.last_update = t_mod.time()
 
     def is_high_velocity(self, multiplier: float) -> bool:
-        """Check if current velocity exceeds historical average by multiplier."""
-        try:
-            if len(self.density_history) < 10:
-                return False
-            if t_mod.time() - self.last_update < 60 * 10:
-                return False
-            
-            current_density = len(self.tick_timestamps) / 30.0
-            avg_density = sum(self.density_history) / len(self.density_history)
-            
-            if avg_density == 0:
-                return False
-            
-            is_high = current_density > (avg_density * multiplier)
-            if is_high:
-                self.logger.debug(
-                    f"High velocity detected: {current_density:.2f} > {avg_density:.2f} * {multiplier}"
-                )
-            return is_high
-            
-        except Exception as e:
-            self.logger.error(f"Error checking high velocity: {e}")
+        """Check for high velocity using cached average."""
+        if len(self.density_history) < 10:
             return False
+        if t_mod.time() - self.last_update < 60 * 10:
+            return False
+        
+        current_density = len(self.tick_timestamps) / 30.0
+        
+        # Use cached average
+        avg_density = self.density_sum / len(self.density_history)
+        
+        if avg_density == 0:
+            return False
+        
+        is_high = current_density > (avg_density * multiplier)
+        if is_high:
+            self.logger.debug(
+                f"High velocity: {current_density:.2f} > {avg_density:.2f} × {multiplier}"
+            )
+        return is_high
+    
+    def get_current_metrics(self) -> Dict[str, float]:
+        """Get current velocity metrics for monitoring."""
+        return {
+            'current_density': len(self.tick_timestamps) / 30.0,
+            'avg_density': self.density_sum / max(len(self.density_history), 1),
+            'history_size': len(self.density_history),
+            'ticks_count': len(self.tick_timestamps)
+        }
 
 
-class StrategyState:
-    """Keeps track of daily state to survive loop cycles."""
+class SymbolInfoCache:
+    """Cache for symbol information to reduce MT5 API calls."""
+    
+    def __init__(self, symbol: str, logger: logging.Logger):
+        self.symbol = symbol
+        self.logger = logger
+        self._cache: Dict[str, Any] = {}
+        self._last_update: float = 0
+        self._update_interval: float = 300  # Update every 5 minutes
+        
+    def get_info(self) -> Optional[Dict[str, Any]]:
+        """Get symbol information with caching."""
+        current_time = t_mod.time()
+        
+        if (current_time - self._last_update) > self._update_interval or not self._cache:
+            info = mt5.symbol_info(self.symbol)
+            if info is None:
+                self.logger.warning(f"Failed to get symbol info for {self.symbol}")
+                return None
+            
+            self._cache = {
+                'contract_size': info.trade_contract_size,
+                'digits': info.digits,
+                'volume_min': info.volume_min,
+                'volume_max': info.volume_max,
+                'volume_step': info.volume_step,
+                'filling_mode': info.filling_mode,
+                'spread': info.spread,
+                'trade_mode': info.trade_mode,
+                'swap_mode': info.swap_mode
+            }
+            self._last_update = current_time
+            self.logger.debug(f"Updated symbol info cache for {self.symbol}")
+        
+        return self._cache
+    
+    def get_contract_size(self) -> Optional[float]:
+        """Get contract size from cache."""
+        info = self.get_info()
+        return info['contract_size'] if info else None
+    
+    def clear_cache(self):
+        """Clear the cache."""
+        self._cache.clear()
+        self._last_update = 0
+
+
+# -------------------------------------------------------------------
+# OPTIMIZED STRATEGY STATE
+# -------------------------------------------------------------------
+class OptimizedStrategyState:
+    """Optimized state management with caching and efficient updates."""
+    
     def __init__(self, symbol: str):
         self.symbol = symbol
         self.current_date = None
@@ -579,8 +745,12 @@ class StrategyState:
         self.in_trade = False
         self.max_pnl = 0.0
         self.entry_price = 0.0
-        self.direction = None  # 'buy' or 'sell'
+        self.direction = None
         self.logger = logging.getLogger("trading_bot.state")
+        
+        # Cache for frequent calculations
+        self._buffer_cache: Dict[float, float] = {}  # contract_size -> buffer_value
+        self._last_buffer_calc: Optional[float] = None
 
     def reset(self, new_date: date) -> None:
         """Reset state for a new trading day."""
@@ -593,6 +763,9 @@ class StrategyState:
         self.touched_opposite = False
         self.in_trade = False
         self.max_pnl = 0.0
+        self.entry_price = 0.0
+        self.direction = None
+        self._buffer_cache.clear()
         self.logger.debug(f"State reset for {new_date}")
 
     def close_trade(self) -> None:
@@ -604,109 +777,37 @@ class StrategyState:
         self.entry_price = 0.0
         self.direction = None
 
+    def calculate_buffer(self, contract_size: float) -> float:
+        """Calculate buffer with caching."""
+        if contract_size == 0:
+            return 0.0
+        
+        if contract_size not in self._buffer_cache:
+            buffer = CONFIG['entry_conditions']['15min_buffer'] / contract_size
+            self._buffer_cache[contract_size] = buffer
+            self._last_buffer_calc = t_mod.time()
+        
+        return self._buffer_cache[contract_size]
+
     def update_trade_status(self, has_position: bool) -> None:
-        """Update trade status based on current positions."""
+        """Update trade status efficiently."""
         if self.in_trade and not has_position:
             self.close_trade()
         elif not self.in_trade and has_position:
             self.in_trade = True
             self.logger.info(f"Trade status updated: in_trade={self.in_trade}")
 
+
 # -------------------------------------------------------------------
-# CORE LOGIC - with enhanced error handling
+# OPTIMIZED CORE LOGIC
 # -------------------------------------------------------------------
-
-@retry(max_attempts=3, delay=2.0, exceptions=(TimezoneError,), logger=logger)
-def get_server_timezone(year: Optional[int] = None, 
-                        month: Optional[int] = None, 
-                        day: Optional[int] = None) -> pytz.tzinfo:
-    """
-    Returns the current server timezone based on:
-    Winter: GMT+2 (Europe/Athens)
-    Summer: GMT+3 (Asia/Baghdad)
-    """
-    logger = logging.getLogger("trading_bot.time")
-    
-    if year is None or month is None or day is None:
-        now_utc = datetime.now(timezone.utc)
-        year = now_utc.year
-        month = now_utc.month
-        day = now_utc.day
-
-    try:
-        now_utc = datetime(year, month, day, tzinfo=timezone.utc)
-
-        # Helper to find the last Sunday of a given month
-        def last_sunday(year: int, month: int) -> datetime:
-            last_day = calendar.monthrange(year, month)[1]
-            dt = datetime(year, month, last_day, tzinfo=timezone.utc)
-            offset = (dt.weekday() + 1) % 7  # Weekday 6 is Sunday
-            return dt - timedelta(days=offset)
-
-        # DST boundaries
-        dst_start = last_sunday(year, 3).replace(hour=1)
-        dst_end = last_sunday(year, 10).replace(hour=1)
-
-        # Determine offset
-        if dst_start <= now_utc < dst_end:
-            zone = UTC3
-            logger.debug(f"Using summer timezone: {zone}")
-        else:
-            zone = UTC2
-            logger.debug(f"Using winter timezone: {zone}")
-
-        return zone
-        
-    except Exception as e:
-        raise TimezoneError(f"Failed to determine server timezone: {e}")
-
-
 @retry(max_attempts=2, delay=1.0, exceptions=(MT5OperationError,), logger=logger)
-def get_server_time(symbol: str) -> Optional[datetime]:
-    """Get MT5 server time with error handling."""
-    logger = logging.getLogger("trading_bot.time")
-    
-    tick = mt5.symbol_info_tick(symbol)
-    if tick is None:
-        error = mt5.last_error()
-        raise MT5OperationError(f"Failed to get tick for server time {symbol}: {error}")
-    
-    try:
-        server_time = pd.to_datetime(tick.time, unit='s')
-        zone = get_server_timezone()
-        server_time = zone.localize(server_time)
-        return server_time
-    except Exception as e:
-        raise TimezoneError(f"Error converting server time: {e}")
-
-
-def get_server_time_cet(symbol: str) -> Optional[datetime]:
-    """Gets MT5 server time and converts to CET."""
-    logger = logging.getLogger("trading_bot.time")
-    
-    try:
-        server_time = get_server_time(symbol)
-        if server_time is None:
-            return None
-        
-        cet_time = server_time.astimezone(CET)
-        logger.debug(f"Time conversion: Server={server_time} -> CET={cet_time}")
-        return cet_time
-        
-    except Exception as e:
-        logger.error(f"Failed to get CET time: {e}")
-        return None
-
-
-@retry(max_attempts=2, delay=2.0, exceptions=(MT5OperationError,), logger=logger)
 def calculate_daily_bias(symbol: str) -> str:
     """
-    Calculates bias based on YESTERDAY'S D1 Candle.
-    (c - l) / (h - l)
+    Optimized daily bias calculation.
     """
     logger = logging.getLogger("trading_bot.bias")
     
-    # Get 2 days of D1 data to ensure we have yesterday completed
     rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 1, 1)
     if rates is None or len(rates) == 0:
         error = mt5.last_error()
@@ -727,90 +828,44 @@ def calculate_daily_bias(symbol: str) -> str:
     elif rc <= CONFIG['bias_filter']['sell_threshold']:
         bias = "sell"
     
-    logger.info(f"Daily bias calculated: {bias} (rc={rc:.3f}, thresholds={CONFIG['bias_filter']})")
+    logger.info(f"Daily bias: {bias} (rc={rc:.3f})")
     return bias
 
 
-def touched_opposite(symbol: str, bias: str, target: float) -> bool:
-    """Check if price has touched opposite side of ghost range."""
-    logger = logging.getLogger("trading_bot.opposite_check")
-    
-    try:
-        today = datetime.now()
-        start_dt = datetime.combine(today, CONFIG['session']['day_open'])
-        end_dt = today
-
-        server_zone = get_server_timezone()
-        # Convert to server timezone
-        start_dt = server_zone.localize(start_dt) if start_dt.tzinfo is None else start_dt.astimezone(server_zone)
-        end_dt = server_zone.localize(end_dt) if end_dt.tzinfo is None else end_dt.astimezone(server_zone)
-
-        rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, end_dt)
-        if rates is None or len(rates) == 0:
-            logger.warning("No M1 data returned for opposite confirmation")
-            return False
-
-        for r in rates:
-            high, low, close = r['high'], r['low'], r['close']
-
-            if bias == "buy" and low <= target:
-                logger.info(f"Touched opposite (buy bias): low={low:.5f} <= target={target:.5f}")
-                return True
-            elif bias == "sell" and high >= target:
-                logger.info(f"Touched opposite (sell bias): high={high:.5f} >= target={target:.5f}")
-                return True
-        
-        return False
-        
-    except Exception as e:
-        logger.error(f"Error checking opposite touch: {e}")
-        return False
-
-
-@retry(max_attempts=3, delay=1.0, exceptions=(MT5OperationError,), logger=logger)
-def get_ghost_range(symbol: str, today_date: date) -> Tuple[Optional[float], Optional[float]]:
+@retry(max_attempts=2, delay=1.0, exceptions=(MT5OperationError,), logger=logger)
+def get_ghost_range(symbol: str, today_date: date, session_times: Dict[str, datetime]) -> Tuple[Optional[float], Optional[float]]:
     """
-    Fetches M1 bars from CET to determine ghost range.
+    Optimized ghost range calculation.
     """
     logger = logging.getLogger("trading_bot.ghost_range")
     
-    # Construct CET times
-    start_dt = datetime.combine(today_date, CONFIG['session']['ghost_start'])
-    end_dt = datetime.combine(today_date, CONFIG['session']['ghost_end'])
+    start_dt = session_times['ghost_start']
+    end_dt = session_times['ghost_end']
     
-    # Convert to server timezone
-    server_zone = get_server_timezone()
-    start_dt = server_zone.localize(start_dt) if start_dt.tzinfo is None else start_dt.astimezone(server_zone)
-    end_dt = server_zone.localize(end_dt) if end_dt.tzinfo is None else end_dt.astimezone(server_zone)
-
     logger.debug(f"Fetching ghost range: {start_dt} to {end_dt}")
     
     rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, end_dt)
     if rates is None or len(rates) == 0:
         raise MT5OperationError(f"No data returned for ghost range: {symbol}")
 
-    # Calculate Min/Max from the bars
+    # Use numpy for efficient min/max
     g_min = float(np.min(rates['low']))
     g_max = float(np.max(rates['high']))
     
-    logger.info(f"Ghost range calculated: {g_min:.5f} - {g_max:.5f}")
+    logger.info(f"Ghost range: {g_min:.5f} - {g_max:.5f}")
     return g_min, g_max
 
 
-@retry(max_attempts=3, delay=1.0, exceptions=(MT5OperationError,), logger=logger)
-def get_frankfurt_open(symbol: str, today_date: date) -> Optional[float]:
-    """Fetch Frankfurt open price."""
+@retry(max_attempts=2, delay=1.0, exceptions=(MT5OperationError,), logger=logger)
+def get_frankfurt_open(symbol: str, today_date: date, session_times: Dict[str, datetime]) -> Optional[float]:
+    """Optimized Frankfurt open price fetch."""
     logger = logging.getLogger("trading_bot.open_price")
     
-    start_dt = datetime.combine(today_date, CONFIG['session']['day_open'])
+    start_dt = session_times['day_open']
     
-    # Convert to server timezone
-    server_zone = get_server_timezone()
-    start_dt = server_zone.localize(start_dt) if start_dt.tzinfo is None else start_dt.astimezone(server_zone)
-
     logger.debug(f"Fetching Frankfurt open at {start_dt}")
     
-    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, start_dt)
+    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, start_dt + timedelta(minutes=1))
     if rates is None or len(rates) == 0:
         raise MT5OperationError(f"No data returned for Frankfurt open: {symbol}")
     
@@ -819,92 +874,86 @@ def get_frankfurt_open(symbol: str, today_date: date) -> Optional[float]:
     return open_price
 
 
-def get_filling_type(symbol: str) -> Optional[int]:
-    """Determine order filling type based on symbol info."""
-    logger = logging.getLogger("trading_bot.order")
-    
-    try:
-        info = mt5.symbol_info(symbol)
-        if info is None:
-            logger.error(f"Cannot get symbol info for: {symbol}")
-            return None
-        
-        # Check bitmask for allowed modes
-        if info.filling_mode & 1:
-            filling = mt5.ORDER_FILLING_FOK
-            logger.debug(f"Filling type: FOK for {symbol}")
-        elif info.filling_mode & 2:
-            filling = mt5.ORDER_FILLING_IOC
-            logger.debug(f"Filling type: IOC for {symbol}")
-        else:
-            filling = mt5.ORDER_FILLING_RETURN
-            logger.debug(f"Filling type: RETURN for {symbol}")
-        
-        return filling
-        
-    except Exception as e:
-        logger.error(f"Error getting filling type: {e}")
+def get_filling_type_from_cache(symbol_info_cache: SymbolInfoCache) -> Optional[int]:
+    """Get filling type from cached symbol info."""
+    info = symbol_info_cache.get_info()
+    if info is None:
         return None
+    
+    filling_mode = info['filling_mode']
+    
+    if filling_mode & 1:
+        return mt5.ORDER_FILLING_FOK
+    elif filling_mode & 2:
+        return mt5.ORDER_FILLING_IOC
+    else:
+        return mt5.ORDER_FILLING_RETURN
 
 
-def validate_order_params(symbol: str, direction: str, sl_pips: float) -> List[str]:
-    """Validate order parameters before execution."""
+def validate_order_params_with_cache(symbol_info_cache: SymbolInfoCache, direction: str, sl_pips: float) -> List[str]:
+    """Validate order parameters using cached symbol info."""
     errors = []
     
-    # Validate symbol
-    info = mt5.symbol_info(symbol)
+    info = symbol_info_cache.get_info()
     if info is None:
-        errors.append(f"Symbol {symbol} not found")
+        errors.append("Cannot get symbol info")
         return errors
     
-    # Validate direction
     if direction not in ['buy', 'sell']:
         errors.append(f"Invalid direction: {direction}")
     
-    # Validate stop loss
     if sl_pips <= 0:
         errors.append(f"Stop loss must be positive: {sl_pips}")
     
-    # Validate volume
     if VOLUME <= 0:
         errors.append(f"Volume must be positive: {VOLUME}")
-    elif VOLUME < info.volume_min:
-        errors.append(f"Volume below minimum: {VOLUME} < {info.volume_min}")
-    elif VOLUME > info.volume_max:
-        errors.append(f"Volume above maximum: {VOLUME} > {info.volume_max}")
-    elif VOLUME % info.volume_step != 0:
-        errors.append(f"Volume not a multiple of step: {VOLUME} % {info.volume_step} != 0")
+    elif VOLUME < info['volume_min']:
+        errors.append(f"Volume below minimum: {VOLUME} < {info['volume_min']}")
+    elif VOLUME > info['volume_max']:
+        errors.append(f"Volume above maximum: {VOLUME} > {info['volume_max']}")
+    elif VOLUME % info['volume_step'] != 0:
+        errors.append(f"Volume not a multiple of step: {VOLUME} % {info['volume_step']} != 0")
     
     return errors
 
 
 @retry(max_attempts=2, delay=1.0, exceptions=(OrderExecutionError,), logger=logger)
-def execute_trade(symbol: str, contract_size: float, direction: str, sl_pips: float) -> Tuple[bool, float]:
-    """Send order to MT5 with comprehensive logging and validation."""
+def execute_trade_with_cache(
+    symbol: str, 
+    symbol_info_cache: SymbolInfoCache, 
+    direction: str, 
+    sl_pips: float
+) -> Tuple[bool, float]:
+    """Optimized trade execution using cached symbol info."""
     logger = logging.getLogger("trading_bot.order")
     
     # Validate parameters
-    validation_errors = validate_order_params(symbol, direction, sl_pips)
+    validation_errors = validate_order_params_with_cache(symbol_info_cache, direction, sl_pips)
     if validation_errors:
         for error in validation_errors:
             logger.error(f"Order validation failed: {error}")
         return False, 0.0
     
-    # Get current tick
+    # Get tick
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         error = mt5.last_error()
         raise OrderExecutionError(f"Cannot get tick for {symbol}: {error}")
     
+    # Get symbol info
+    info = symbol_info_cache.get_info()
+    if info is None:
+        raise OrderExecutionError(f"Cannot get symbol info for {symbol}")
+    
     # Get filling type
-    filling = get_filling_type(symbol)
+    filling = get_filling_type_from_cache(symbol_info_cache)
     if filling is None:
         raise OrderExecutionError(f"Cannot determine filling type for {symbol}")
     
-    # Calculate stop loss
+    # Calculate prices
+    contract_size = info['contract_size']
     sl_points = sl_pips / contract_size
     
-    # Prepare order request
     if direction == 'buy':
         price = tick.ask
         sl_price = price - sl_points
@@ -914,16 +963,12 @@ def execute_trade(symbol: str, contract_size: float, direction: str, sl_pips: fl
         sl_price = price + sl_points
         order_type = mt5.ORDER_TYPE_SELL
     
-    # Validate prices
-    symbol_info = mt5.symbol_info(symbol)
-    if price <= 0 or sl_price <= 0:
-        raise OrderExecutionError(f"Invalid prices: price={price}, sl={sl_price}")
-    
-    # Round prices to appropriate digits
-    digits = symbol_info.digits
+    # Round prices
+    digits = info['digits']
     price = round(price, digits)
     sl_price = round(sl_price, digits)
     
+    # Prepare request
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
@@ -938,151 +983,52 @@ def execute_trade(symbol: str, contract_size: float, direction: str, sl_pips: fl
         "type_filling": filling,
     }
     
-    logger.info(f"Sending {direction} order: price={price:.5f}, sl={sl_price:.5f}, volume={VOLUME}")
+    logger.info(f"Sending {direction} order: price={price:.5f}, sl={sl_price:.5f}")
     
     result = mt5.order_send(request)
     
     if result is None:
-        raise OrderExecutionError(f"No response from MT5 for order")
+        raise OrderExecutionError("No response from MT5")
     
     if result.retcode != mt5.TRADE_RETCODE_DONE:
-        error_msg = f"Order failed: {result.comment} (retcode: {result.retcode})"
-        logger.debug(f"Request details: {request}")
-        raise OrderExecutionError(error_msg)
+        raise OrderExecutionError(f"Order failed: {result.comment} (retcode: {result.retcode})")
     
     logger.info(f"Trade executed: {direction} at {result.price:.5f}, ticket: {result.order}")
     return True, result.price
 
 
-@retry(max_attempts=2, delay=1.0, exceptions=(MT5OperationError,), logger=logger)
-def close_position(symbol: str) -> None:
-    """Close all positions with our Magic Number."""
-    logger = logging.getLogger("trading_bot.order")
-    
-    positions = mt5.positions_get(symbol=symbol)
-    if positions is None:
-        logger.warning(f"No positions found for {symbol}")
-        return
-    
-    positions_closed = 0
-    for pos in positions:
-        if pos.magic == MAGIC_NUM:
-            tick = mt5.symbol_info_tick(symbol)
-            if tick is None:
-                error = mt5.last_error()
-                raise MT5OperationError(f"Cannot get tick for closing position {pos.ticket}: {error}")
-            
-            if pos.type == mt5.ORDER_TYPE_BUY:
-                price = tick.bid
-                close_type = mt5.ORDER_TYPE_SELL
-            else:
-                price = tick.ask
-                close_type = mt5.ORDER_TYPE_BUY
-            
-            request = {
-                "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": symbol,
-                "volume": pos.volume,
-                "type": close_type,
-                "position": pos.ticket,
-                "price": price,
-                "deviation": DEVIATION,
-                "magic": MAGIC_NUM,
-                "comment": "Mandatory Close"
-            }
-            
-            logger.info(f"Closing position {pos.ticket} ({'BUY' if pos.type == mt5.ORDER_TYPE_BUY else 'SELL'})")
-            result = mt5.order_send(request)
-            
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
-                error_msg = f"Position close failed: {result.comment}"
-                raise MT5OperationError(error_msg)
-            else:
-                logger.info(f"Position {pos.ticket} closed at {result.price:.5f}")
-                positions_closed += 1
-    
-    if positions_closed > 0:
-        logger.info(f"Closed {positions_closed} position(s)")
-
-
-@retry(max_attempts=2, delay=1.0, exceptions=(MT5OperationError,), logger=logger)
-def modify_sl(symbol: str, ticket: int, new_sl: float) -> bool:
-    """Modify stop loss for existing position."""
-    logger = logging.getLogger("trading_bot.order")
-    
-    # Validate new SL
-    symbol_info = mt5.symbol_info(symbol)
-    if symbol_info is None:
-        raise MT5OperationError(f"Cannot get symbol info for {symbol}")
-    
-    # Round to appropriate digits
-    digits = symbol_info.digits
-    new_sl = round(new_sl, digits)
-    
-    request = {
-        "action": mt5.TRADE_ACTION_SLTP,
-        "symbol": symbol,
-        "position": ticket,
-        "sl": new_sl,
-        "magic": MAGIC_NUM
-    }
-    
-    logger.debug(f"Modifying SL for ticket {ticket}: new_sl={new_sl:.5f}")
-    
-    result = mt5.order_send(request)
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
-        error_msg = f"SL modification failed: {result.comment}"
-        raise MT5OperationError(error_msg)
-    
-    logger.info(f"SL modified for ticket {ticket}: {new_sl:.5f}")
-    return True
-
-
 def safe_mt5_call(func: Callable, *args, **kwargs) -> Any:
     """
-    Safely call MT5 functions with connection checking and error handling.
-    
-    Args:
-        func: MT5 function to call
-        *args: Function arguments
-        **kwargs: Function keyword arguments
-    
-    Returns:
-        Function result or None if failed
+    Optimized safe MT5 call with connection checking.
     """
     global connection_manager, logger
     
     if connection_manager is None or logger is None:
         return None
     
-    # Ensure connection is active
     if not connection_manager.ensure_connection():
         logger.error("Cannot perform MT5 operation: connection not available")
         return None
     
     try:
-        result = func(*args, **kwargs)
-        return result
+        return func(*args, **kwargs)
     except Exception as e:
         logger.error(f"MT5 operation failed: {e}")
-        
-        # Mark connection as potentially bad
         connection_manager.connected = False
-        
         return None
 
-# -------------------------------------------------------------------
-# MAIN LOOP
-# -------------------------------------------------------------------
 
+# -------------------------------------------------------------------
+# OPTIMIZED MAIN LOOP
+# -------------------------------------------------------------------
 def main():
     global logger, connection_manager
     
-    parser = argparse.ArgumentParser(description="Live trading momentum based bot for HFM")
+    parser = argparse.ArgumentParser(description="Optimized live trading bot")
     parser.add_argument("symbol", help="symbol to be traded")
     parser.add_argument("--log-level", default="INFO", 
                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-                       help="Logging level (default: INFO)")
+                       help="Logging level")
     parser.add_argument("--validate-config", action="store_true",
                        help="Validate configuration and exit")
     args = parser.parse_args()
@@ -1091,8 +1037,7 @@ def main():
     
     # Initialize logger
     logger = TradingLogger.setup_logging(symbol, args.log_level)
-    logger.info(f"Starting trading bot for symbol: {symbol}")
-    logger.info(f"Log level: {args.log_level}")
+    logger.info(f"Starting optimized trading bot for {symbol}")
     
     # Validate configuration
     config_errors = ConfigValidator.validate_config(CONFIG)
@@ -1102,12 +1047,9 @@ def main():
             logger.error(f"  - {error}")
         
         if args.validate_config:
-            logger.info("Configuration validation completed with errors")
             sys.exit(1)
         else:
-            logger.warning("Proceeding with invalid configuration (use --validate-config to validate)")
-    else:
-        logger.info("Configuration validation passed")
+            logger.warning("Proceeding with invalid configuration")
     
     if args.validate_config:
         logger.info("Configuration validation completed successfully")
@@ -1116,7 +1058,6 @@ def main():
     # Initialize connection manager
     connection_manager = MT5ConnectionManager(LOGIN, PASSWORD, SERVER, logger)
     
-    # Initialize MT5 connection
     if not connection_manager.initialize():
         logger.error("Failed to initialize MT5 connection")
         sys.exit(1)
@@ -1125,277 +1066,261 @@ def main():
     signal_handler = SignalHandler(logger, connection_manager)
     signal_handler.setup()
     
-    # Check symbol
-    symbol_info = safe_mt5_call(mt5.symbol_info, symbol)
-    if symbol_info is None:
-        logger.error(f"Symbol {symbol} not found or cannot be selected")
+    # Initialize caches and managers
+    symbol_info_cache = SymbolInfoCache(symbol, logger)
+    session_time_manager = SessionTimeManager(CONFIG, symbol, logger)
+    
+    # Get initial symbol info
+    info = safe_mt5_call(symbol_info_cache.get_info)
+    if info is None:
+        logger.error(f"Cannot get symbol info for {symbol}")
         connection_manager.shutdown()
         sys.exit(1)
     
-    if not safe_mt5_call(mt5.symbol_select, symbol, True):
-        logger.error(f"Cannot select symbol {symbol}")
-        connection_manager.shutdown()
-        sys.exit(1)
-    
-    contract_size = symbol_info.trade_contract_size
-    logger.info(f"Symbol {symbol} selected, contract size: {contract_size}")
+    contract_size = info['contract_size']
+    logger.info(f"Symbol {symbol} loaded, contract size: {contract_size}")
     logger.info(f"Session hours: {CONFIG['session']['start_hour']:02d}:{CONFIG['session']['start_minute']:02d} - "
                 f"{CONFIG['session']['end_hour']:02d}:{CONFIG['session']['end_minute']:02d}")
 
     # Initialize state and monitoring
-    state = StrategyState(symbol)
-    velocity = VelocityMonitor(symbol, lookback_seconds=CONFIG['entry_conditions']['lookback_period'])
+    state = OptimizedStrategyState(symbol)
+    velocity = OptimizedVelocityMonitor(symbol, CONFIG['entry_conditions']['lookback_period'])
     
-    logger.info("Live trading started")
+    logger.info("Optimized trading started")
     
-    last_update_seconds = t_mod.time()
-    consecutive_errors = 0
-    max_consecutive_errors = 10
-
+    # Performance tracking
+    last_velocity_update = t_mod.time()
+    last_position_check = t_mod.time()
+    last_metrics_log = t_mod.time()
+    loop_iterations = 0
+    iteration_start_time = t_mod.time()
+    
+    # Performance configuration
+    perf_config = CONFIG['performance']
+    tick_interval = perf_config['tick_processing_interval']
+    velocity_interval = perf_config['velocity_update_interval']
+    position_check_interval = perf_config['position_check_interval']
+    outside_session_sleep = perf_config['outside_session_sleep']
+    
     try:
         while not signal_handler.should_shutdown():
-            # Hardware Efficiency: Sleep to reduce CPU usage
-            t_mod.sleep(0.1)
+            loop_iterations += 1
+            iteration_start_time = t_mod.time()
             
             # Check connection
             if not connection_manager.ensure_connection():
-                logger.error("Lost connection to MT5 and unable to reconnect")
-                consecutive_errors += 1
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.error(f"Too many consecutive errors ({consecutive_errors}), shutting down")
-                    break
+                logger.error("Lost connection to MT5")
                 t_mod.sleep(5)
                 continue
             
-            # Reset error counter on successful connection
-            consecutive_errors = 0
-            
-            # Update Time
-            now = safe_mt5_call(get_server_time, symbol)
-            if now is None:
-                logger.warning("Could not get server time, skipping iteration")
+            # Get current time
+            tick_info = safe_mt5_call(mt5.symbol_info_tick, symbol)
+            if tick_info is None:
+                logger.debug(f"No tick data for {symbol}")
+                t_mod.sleep(tick_interval)
                 continue
-                
-            now_cet = get_server_time_cet(symbol)
-            if now_cet is None:
-                logger.warning("Could not convert to CET time, skipping iteration")
-                continue
-                
-            today_date = now.date()
             
-            # 3. New Day Logic
+            # Get server time from tick
+            server_time = pd.to_datetime(tick_info.time, unit='s')
+            server_tz = TimeCache.get_timezone(server_time.date())
+            server_time = server_tz.localize(server_time) if server_time.tzinfo is None else server_time.astimezone(server_tz)
+            
+            # Check if we're in trading hours
+            if not session_time_manager.is_in_trading_hours(server_time):
+                # Outside trading hours - sleep longer
+                logger.debug(f"Outside trading hours: {server_time}")
+                t_mod.sleep(outside_session_sleep)
+                continue
+            
+            today_date = server_time.date()
+            
+            # New Day Logic
             if state.current_date != today_date:
                 state.reset(today_date)
                 bias = safe_mt5_call(calculate_daily_bias, symbol)
                 if bias is not None:
                     state.bias = bias
                     logger.info(f"Daily bias set to: {state.bias}")
-
-            # 4. Data Processing (Tick)
-            tick = safe_mt5_call(mt5.symbol_info_tick, symbol)
-            if tick is None:
-                logger.debug(f"No tick data for {symbol}")
-                continue
             
+            # Process tick data
             velocity.on_tick()
             
-            # Update Velocity History every 1 second
-            if t_mod.time() - last_update_seconds >= 1.0:
-                if len(velocity.density_history) > 0:
-                    avg_vel = sum(velocity.density_history) / len(velocity.density_history)
-                    logger.debug(f"Tick velocity: current={len(velocity.tick_timestamps)/30.0:.2f}, avg={avg_vel:.2f}")
-                
+            # Update velocity history at fixed interval
+            current_time = t_mod.time()
+            if current_time - last_velocity_update >= velocity_interval:
                 velocity.update_history()
-                last_update_seconds = t_mod.time()
-
-                # Log velocity every 5 minutes
-                if datetime.now().time().minute % 5 == 0 and datetime.now().time().second == 0:
-                    if len(velocity.density_history) > 0:
-                        logger.info(f"Velocity snapshot: {velocity.density_history[-1]:.2f}")
-
-            # 5. Logic Gates
+                last_velocity_update = current_time
+                
+                # Log metrics every 5 minutes
+                if current_time - last_metrics_log >= 300:
+                    metrics = velocity.get_current_metrics()
+                    logger.info(f"Velocity metrics: {metrics}")
+                    last_metrics_log = current_time
             
-            # A. Capture Ghost Range (Runs once after 08:30)
-            if state.ghost_high is None:
-                if now_cet.time() > CONFIG['session']['ghost_end']:
-                    ghost_range = safe_mt5_call(get_ghost_range, symbol, today_date)
-                    if ghost_range is not None:
-                        g_min, g_max = ghost_range
-                        state.ghost_low = g_min
-                        state.ghost_high = g_max
-                        logger.info(f"Ghost range locked: {g_min:.5f} - {g_max:.5f}")
-                    else:
-                        logger.warning("Waiting for ghost data...")
-                        t_mod.sleep(5)
-                        continue
-
-            # B. Capture Daily Open (Frankfurt 09:00)
-            if state.daily_open_price is None:
-                target_open = CONFIG['session']['day_open']
-                if now_cet.time() >= target_open:
-                    open_price = safe_mt5_call(get_frankfurt_open, symbol, today_date)
-                    if open_price is not None:
-                        state.daily_open_price = open_price
-                        logger.info(f"Market open price recorded: {open_price:.5f}")
-                    else:
-                        logger.warning("Could not get Frankfurt open price")
-
-            # C. Check for existing positions
-            positions = safe_mt5_call(mt5.positions_get, symbol=symbol)
+            # Get session times for today
+            session_times = session_time_manager.get_session_times(today_date)
+            
+            # Capture Ghost Range (once after ghost_end)
+            if state.ghost_high is None and session_time_manager.should_check_ghost_range(server_time):
+                ghost_range = safe_mt5_call(get_ghost_range, symbol, today_date, session_times)
+                if ghost_range is not None:
+                    g_min, g_max = ghost_range
+                    state.ghost_low = g_min
+                    state.ghost_high = g_max
+                    logger.info(f"Ghost range locked: {g_min:.5f} - {g_max:.5f}")
+            
+            # Capture Daily Open
+            if state.daily_open_price is None and session_time_manager.should_check_market_open(server_time):
+                open_price = safe_mt5_call(get_frankfurt_open, symbol, today_date, session_times)
+                if open_price is not None:
+                    state.daily_open_price = open_price
+                    logger.info(f"Market open price: {open_price:.5f}")
+            
+            # Check positions at reduced frequency
+            if current_time - last_position_check >= position_check_interval:
+                positions = safe_mt5_call(mt5.positions_get, symbol=symbol)
+                last_position_check = current_time
+            else:
+                positions = []
+            
             if positions is None:
                 positions = []
             
             my_pos = [p for p in positions if p.magic == MAGIC_NUM]
             open_pos = len(my_pos) > 0
-
+            
             # Update trade status
             state.update_trade_status(open_pos)
             
-            # Multiple positions warning
-            if len(my_pos) > 1:
-                logger.warning(f"Multiple positions open: {len(my_pos)}")
-                for p in my_pos:
-                    logger.warning(f"  - Ticket {p.ticket}: {p.type} {p.volume} @ {p.price_open}")
-            
-            # -----------------------------------------------------------
-            # EXIT / RISK MANAGEMENT LOGIC
-            # -----------------------------------------------------------
+            # Handle open positions
             if state.in_trade and my_pos:
                 pos = my_pos[0]
                 
                 # Mandatory Close (Time)
-                close_time = time(CONFIG['session']['end_hour'], CONFIG['session']['end_minute'])
-                if now_cet.time() >= close_time:
-                    logger.info(f"Mandatory close triggered: {now_cet.time()} >= {close_time}")
-                    safe_mt5_call(close_position, symbol)
+                if server_time >= session_times['session_end']:
+                    logger.info(f"Mandatory close triggered: {server_time}")
+                    safe_mt5_call(mt5.positions_close, pos.ticket)
                     continue
-
+                
                 # Trailing Stop Logic
                 if pos.type == mt5.ORDER_TYPE_BUY:
-                    current_profit_points = (tick.bid - pos.price_open) * contract_size
+                    current_profit_points = (tick_info.bid - pos.price_open) * contract_size
                 else:
-                    current_profit_points = (pos.price_open - tick.ask) * contract_size
-                
-                logger.debug(f"Current profit: {current_profit_points:.2f} pips, Max: {state.max_pnl:.2f}")
+                    current_profit_points = (pos.price_open - tick_info.ask) * contract_size
                 
                 if current_profit_points > state.max_pnl:
                     state.max_pnl = current_profit_points
-                    logger.info(f"New max profit: {state.max_pnl:.2f} pips")
-
-                # Check Stages
-                best_retention = 0.0
-                triggered = False
+                    logger.debug(f"New max profit: {state.max_pnl:.2f} pips")
                 
-                for s in CONFIG['risk_management']['trailing_stages']:
-                    if state.max_pnl >= s['min_profit']:
-                        best_retention = s['retention']
-                        triggered = True
-                
-                if triggered and best_retention != -1:
-                    trail_dist = state.max_pnl * best_retention
-                    trail_dist /= contract_size
-                    
-                    if pos.type == mt5.ORDER_TYPE_BUY:
-                        new_sl = pos.price_open + trail_dist
-                        should_modify = (pos.sl == 0 or new_sl > pos.sl)
-                    else:
-                        new_sl = pos.price_open - trail_dist
-                        should_modify = (pos.sl == 0 or new_sl < pos.sl)
-                    
-                    if should_modify:
-                        new_sl = round(new_sl, 5)
-                        logger.info(f"Modifying SL to {new_sl:.5f} (retention: {best_retention})")
-                        safe_mt5_call(modify_sl, symbol, pos.ticket, new_sl)
-
-            # -----------------------------------------------------------
-            # ENTRY LOGIC
-            # -----------------------------------------------------------
+                # Apply trailing stop
+                for stage in CONFIG['risk_management']['trailing_stages']:
+                    if state.max_pnl >= stage['min_profit'] and stage['retention'] != -1:
+                        trail_dist = state.max_pnl * stage['retention'] / contract_size
+                        
+                        if pos.type == mt5.ORDER_TYPE_BUY:
+                            new_sl = pos.price_open + trail_dist
+                            should_modify = (pos.sl == 0 or new_sl > pos.sl)
+                        else:
+                            new_sl = pos.price_open - trail_dist
+                            should_modify = (pos.sl == 0 or new_sl < pos.sl)
+                        
+                        if should_modify:
+                            logger.info(f"Modifying SL to {new_sl:.5f}")
+                            safe_mt5_call(mt5.order_modify, pos.ticket, sl=new_sl)
+                            break
+            
+            # Entry Logic
             elif state.bias != "straddle" and state.ghost_high is not None and state.daily_open_price is not None:
-                
-                # Time Window Check
-                start_t = time(CONFIG['session']['start_hour'], CONFIG['session']['start_minute'])
-                end_t = time(CONFIG['session']['end_hour'], CONFIG['session']['end_minute'])
-                
-                if start_t <= now_cet.time() < end_t:
-                    
-                    buffer = CONFIG['entry_conditions']['15min_buffer']
-                    buffer /= contract_size
+                if session_time_manager.is_in_trading_hours(server_time):
+                    buffer = state.calculate_buffer(contract_size)
                     
                     # BUY LOGIC
                     if state.bias == 'buy':
-                        # 1. Touch Opposite (Trap)
                         lower_target = state.ghost_low + buffer
-                        if tick.ask <= lower_target:
-                            if not state.touched_opposite:
-                                logger.info(f"Trap: Touched opposite low at {lower_target:.5f} (Buy Setup)")
-                                state.touched_opposite = True
+                        upper_target = state.ghost_high - buffer
                         
-                        # 2. Trigger
-                        if state.touched_opposite:
-                            upper_target = state.ghost_high - buffer
-                            if tick.ask >= upper_target:
-                                if tick.ask > state.daily_open_price:
-                                    if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']):
-                                        logger.info(f"Entry conditions met: Price={tick.ask:.5f} >= {upper_target:.5f}, "
-                                                   f"above open={state.daily_open_price:.5f}, high velocity")
-                                        success, price = safe_mt5_call(
-                                            execute_trade, symbol, contract_size, 'buy', CONFIG['risk_management']['initial_sl']
-                                        )
-                                        if success:
-                                            state.in_trade = True
-                                            state.entry_price = price
-                                            state.direction = 'buy'
-                                            state.touched_opposite = False
-                                            logger.info(f"Buy trade entered at {price:.5f}")
-
+                        if tick_info.ask <= lower_target and not state.touched_opposite:
+                            logger.info(f"Trap: Touched opposite low at {lower_target:.5f}")
+                            state.touched_opposite = True
+                        
+                        if (state.touched_opposite and 
+                            tick_info.ask >= upper_target and 
+                            tick_info.ask > state.daily_open_price and
+                            velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier'])):
+                            
+                            logger.info(f"Buy entry: Price={tick_info.ask:.5f} >= {upper_target:.5f}")
+                            success, price = safe_mt5_call(
+                                execute_trade_with_cache, symbol, symbol_info_cache, 'buy', 
+                                CONFIG['risk_management']['initial_sl']
+                            )
+                            if success:
+                                state.in_trade = True
+                                state.entry_price = price
+                                state.direction = 'buy'
+                                state.touched_opposite = False
+                    
                     # SELL LOGIC
                     elif state.bias == 'sell':
-                        # 1. Touch Opposite (Trap)
                         upper_target = state.ghost_high - buffer
-                        if tick.bid >= upper_target:
-                            if not state.touched_opposite:
-                                logger.info(f"Trap: Touched opposite high at {upper_target:.5f} (Sell Setup)")
-                                state.touched_opposite = True
+                        lower_target = state.ghost_low + buffer
                         
-                        # 2. Trigger
-                        if state.touched_opposite:
-                            lower_target = state.ghost_low + buffer
-                            if tick.bid <= lower_target:
-                                if tick.bid < state.daily_open_price:
-                                    if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']):
-                                        logger.info(f"Entry conditions met: Price={tick.bid:.5f} <= {lower_target:.5f}, "
-                                                   f"below open={state.daily_open_price:.5f}, high velocity")
-                                        success, price = safe_mt5_call(
-                                            execute_trade, symbol, contract_size, 'sell', CONFIG['risk_management']['initial_sl']
-                                        )
-                                        if success:
-                                            state.in_trade = True
-                                            state.entry_price = price
-                                            state.direction = 'sell'
-                                            state.touched_opposite = False
-                                            logger.info(f"Sell trade entered at {price:.5f}")
-
+                        if tick_info.bid >= upper_target and not state.touched_opposite:
+                            logger.info(f"Trap: Touched opposite high at {upper_target:.5f}")
+                            state.touched_opposite = True
+                        
+                        if (state.touched_opposite and 
+                            tick_info.bid <= lower_target and 
+                            tick_info.bid < state.daily_open_price and
+                            velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier'])):
+                            
+                            logger.info(f"Sell entry: Price={tick_info.bid:.5f} <= {lower_target:.5f}")
+                            success, price = safe_mt5_call(
+                                execute_trade_with_cache, symbol, symbol_info_cache, 'sell',
+                                CONFIG['risk_management']['initial_sl']
+                            )
+                            if success:
+                                state.in_trade = True
+                                state.entry_price = price
+                                state.direction = 'sell'
+                                state.touched_opposite = False
+            
+            # Adaptive sleep based on processing time
+            iteration_time = t_mod.time() - iteration_start_time
+            sleep_time = max(0.0, tick_interval - iteration_time)
+            if sleep_time > 0:
+                t_mod.sleep(sleep_time)
+            
+            # Log performance every 1000 iterations
+            if loop_iterations % 1000 == 0:
+                avg_iteration_time = (t_mod.time() - iteration_start_time) / 1000
+                logger.debug(f"Performance: {avg_iteration_time:.4f}s per iteration, "
+                           f"velocity history: {len(velocity.density_history)}")
+                iteration_start_time = t_mod.time()
+    
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received")
     except Exception as e:
-        logger.error(f"Unexpected error in main loop: {e}", exc_info=True)
+        logger.error(f"Unexpected error: {e}", exc_info=True)
     finally:
         logger.info("Initiating graceful shutdown...")
         
-        # Close any open positions
+        # Close positions
         try:
             positions = safe_mt5_call(mt5.positions_get, symbol=symbol)
             if positions:
-                logger.info(f"Closing {len(positions)} open position(s)...")
-                safe_mt5_call(close_position, symbol)
+                logger.info(f"Closing {len(positions)} positions...")
+                for pos in positions:
+                    if pos.magic == MAGIC_NUM:
+                        safe_mt5_call(mt5.positions_close, pos.ticket)
         except Exception as e:
-            logger.error(f"Error closing positions during shutdown: {e}")
+            logger.error(f"Error closing positions: {e}")
         
-        # Shutdown connection
+        # Shutdown
         if connection_manager:
             connection_manager.shutdown()
         
-        logger.info("Trading bot stopped gracefully")
+        logger.info(f"Trading bot stopped. Total iterations: {loop_iterations}")
+
 
 if __name__ == "__main__":
     main()
