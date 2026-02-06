@@ -395,6 +395,7 @@ def execute_trade(symbol, contract_size, direction, sl_pips):
     result = mt5.order_send(request)
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         print(f"Order Failed: {result.comment}")
+        print(request)
         return False, 0.0
     
     print(f"Trade Executed: {direction} at {result.price}")
@@ -431,6 +432,7 @@ def modify_sl(symbol, ticket, new_sl):
     result = mt5.order_send(request)
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         print(f"SL modification Failed: {result.comment}")
+        print(f"{new_sl}")
     
         
 
@@ -591,7 +593,7 @@ def main():
                 if state.max_pnl >= s['min_profit']:
                     best_retention = s['retention']
                     triggered = True
-            
+            # best_retention = 0.5
             if triggered:
                 # Calculate new SL
                 # print(f"{best_retention=}")
@@ -601,8 +603,10 @@ def main():
                 else:
                     trail_dist = state.max_pnl * best_retention
                     trail_dist /= contract_size
-                    new_sl = (tick.bid + trail_dist) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - trail_dist)
-                
+                    new_sl = (pos.price_open + trail_dist) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - trail_dist)
+                    new_sl = round(new_sl, 2)
+                    # print(f"{trail_dist=}")
+                    # print(f"{new_sl=}")
                     # Only modify if new SL is better (Higher for Buy, Lower for Sell)
                     should_mod = False
                     if pos.type == mt5.ORDER_TYPE_BUY and (pos.sl == 0 or new_sl > pos.sl): should_mod = True
@@ -629,20 +633,23 @@ def main():
                 # BUY LOGIC
                 if state.bias == 'buy':
                     # 1. Touch Opposite (Trap)
-                    target = state.ghost_low + buffer
-                    if tick.ask <= target:
+                    lower_target = state.ghost_low + buffer
+                    if tick.ask <= lower_target:
                         if not state.touched_opposite:
-                            print("Trap: Touched Opposite Low (Buy Setup)")
+                            print(f"Trap: Touched Opposite Low at {lower_target} (Buy Setup)")
                             state.touched_opposite = True
                     # Error: Might add continue to prevent tick spikes/maddness
                     # 2. Trigger
                     if state.touched_opposite:
                         # Price back above High - Buffer
-                        if tick.ask >= state.ghost_high - buffer:
+                        upper_target = state.ghost_high - buffer
+                        if tick.ask >= upper_target:
                             # Above Daily Open
                             if tick.ask > state.daily_open_price:
                                 # High Velocity
                                 if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']):
+                                    print(f"Price >= {upper_target} and  > {state.daily_open_price}")
+                                    print(now_cet)
                                     print(f"Entering Buy")
                                     # continue
                                     success, price = execute_trade(symbol, contract_size, 'buy', CONFIG['risk_management']['initial_sl'])
@@ -654,17 +661,20 @@ def main():
                 # SELL LOGIC
                 elif state.bias == 'sell':
                     # 1. Touch Opposite (Trap)
-                    target = state.ghost_high - buffer
-                    if tick.bid >= target:
+                    upper_target = state.ghost_high - buffer
+                    if tick.bid >= upper_target:
                         if not state.touched_opposite:
-                            print("Trap: Touched Opposite High (Sell Setup)")
+                            print(f"Trap: Touched Opposite High at{upper_target} (Sell Setup)")
                             state.touched_opposite = True
                     # Error: Might add continue to prevent tick spikes/maddness
                     # 2. Trigger
                     if state.touched_opposite:
-                        if tick.bid <= state.ghost_low + buffer:
+                        lower_target = state.ghost_low + buffer
+                        if tick.bid <= lower_target:
                             if tick.bid < state.daily_open_price:
                                 if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']):
+                                    print(f"Price <= {lower_target} and < {state.daily_open_price}")
+                                    print(now_cet)
                                     print(f"Entering Sell")
                                     # continue
                                     success, price = execute_trade(symbol, contract_size, 'sell', CONFIG['risk_management']['initial_sl'])
