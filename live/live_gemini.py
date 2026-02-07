@@ -541,6 +541,7 @@ def main():
             # If it is 09:00 or later
             target_open = CONFIG['session']['day_open']
             if now_cet.time() >= target_open:
+                print(now_cet)
                 # Error: add error handling
                 state.daily_open_price = get_frankfurt_open(symbol, today_date) #tick.ask if state.bias == "buy" else tick.bid # Approximate open with current Ask
                 print(f"Market Open Price Recorded: {state.daily_open_price}")
