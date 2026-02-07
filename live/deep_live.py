@@ -156,6 +156,7 @@ class DateTimeUtils:
     # Timezone constants
     CET = pytz.timezone('Europe/Berlin')
     UTC = pytz.utc
+    LOCAL_TIME = pytz.timezone('Africa/Lagos')
     
     @staticmethod
     @lru_cache(maxsize=128)
@@ -206,7 +207,8 @@ class SessionTimeManager:
         
         # Helper function to create localized datetime
         def make_dt(t: time) -> datetime:
-            return DateTimeUtils.combine_date_time(for_date, t, server_tz)
+            tz= DateTimeUtils.LOCAL_TIME
+            return DateTimeUtils.combine_date_time(for_date, t, tz)
         
         session_config = self.config['session']
         
@@ -409,7 +411,7 @@ class ConfigValidator:
         elif not 0 <= bias_filter['sell_threshold'] <= 1:
             errors.append("'bias_filter.sell_threshold' must be between 0 and 1")
         
-        if bias_filter.get('buy_threshold', 1) <= bias_filter.get('sell_threshold', 0):
+        if bias_filter['buy_threshold'] <= bias_filter['sell_threshold']:
             errors.append("'buy_threshold' must be greater than 'sell_threshold'")
         
         # Validate entry_conditions
@@ -831,6 +833,16 @@ def calculate_daily_bias(symbol: str) -> str:
     logger.info(f"Daily bias: {bias} (rc={rc:.3f})")
     return bias
 
+def to_mt5_time(dt: datetime) -> datetime:
+    """Convert local server time to UTC for MT5 functions."""
+    SERVER_TIMEZONE = TimeCache.get_timezone(dt.date())
+    if dt.tzinfo is None:
+        # Assuming dt is in local timezone
+        dt = DateTimeUtils.LOCAL_TIME.localize(dt)
+    # Convert to servertime and replace tz with utc so the epoch times register correctly
+    dt = dt.astimezone(TimeCache.get_timezone()).replace(tzinfo=timezone.utc)
+    return dt
+
 
 @retry(max_attempts=2, delay=1.0, exceptions=(MT5OperationError,), logger=logger)
 def get_ghost_range(symbol: str, today_date: date, session_times: Dict[str, datetime]) -> Tuple[Optional[float], Optional[float]]:
@@ -839,8 +851,8 @@ def get_ghost_range(symbol: str, today_date: date, session_times: Dict[str, date
     """
     logger = logging.getLogger("trading_bot.ghost_range")
     
-    start_dt = session_times['ghost_start']
-    end_dt = session_times['ghost_end']
+    start_dt = to_mt5_time(session_times['ghost_start'])
+    end_dt = to_mt5_time(session_times['ghost_end'])
     
     logger.debug(f"Fetching ghost range: {start_dt} to {end_dt}")
     
@@ -861,7 +873,8 @@ def get_frankfurt_open(symbol: str, today_date: date, session_times: Dict[str, d
     """Optimized Frankfurt open price fetch."""
     logger = logging.getLogger("trading_bot.open_price")
     
-    start_dt = session_times['day_open']
+    start_dt = to_mt5_time(session_times['day_open'])
+    
     
     logger.debug(f"Fetching Frankfurt open at {start_dt}")
     
