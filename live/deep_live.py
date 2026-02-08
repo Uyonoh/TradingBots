@@ -598,7 +598,7 @@ class OptimizedVelocityMonitor:
                 return np.array([])
         
         # Use a larger batch size but limit frequency
-        ticks = mt5.copy_ticks_from(self.symbol, server_time, 5000, mt5.COPY_TICKS_ALL)
+        ticks = np.asarray([t for t in mt5.copy_ticks_from(self.symbol, server_time, 5000, mt5.COPY_TICKS_ALL) if t['time_msc']/1000 > server_time])
         if ticks is None or len(ticks) == 0:
             return np.array([])
         
@@ -614,7 +614,8 @@ class OptimizedVelocityMonitor:
         
         # Get new timestamps
         if len(self.tick_timestamps) == 0:
-            timestamps = self.get_tick_timestamps_batch(now)
+            # Subtract a small number so that the current timestamp is included
+            timestamps = self.get_tick_timestamps_batch(now - 0.001)
         else:
             timestamps = self.get_tick_timestamps_batch(self.tick_timestamps[-1])
         
