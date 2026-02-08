@@ -157,6 +157,11 @@ class DateTimeUtils:
     CET = pytz.timezone('Europe/Berlin')
     UTC = pytz.utc
     LOCAL_TIME = pytz.timezone('Africa/Lagos')
+
+    @staticmethod
+    def parse_time(t: str):
+        dt = datetime.strptime(t, '%H:%M')
+        return dt.time()
     
     @staticmethod
     @lru_cache(maxsize=128)
@@ -206,8 +211,10 @@ class SessionTimeManager:
         server_tz = TimeCache.get_timezone(for_date)
         
         # Helper function to create localized datetime
-        def make_dt(t: time) -> datetime:
+        def make_dt(t: str) -> datetime:
+            format = "%H:%M"
             tz= DateTimeUtils.LOCAL_TIME
+            t = datetime.strptime(t, format).time()
             return DateTimeUtils.combine_date_time(for_date, t, tz)
         
         session_config = self.config['session']
@@ -216,8 +223,8 @@ class SessionTimeManager:
             'day_open': make_dt(session_config['day_open']),
             'ghost_start': make_dt(session_config['ghost_start']),
             'ghost_end': make_dt(session_config['ghost_end']),
-            'session_start': make_dt(time(session_config['start_hour'], session_config['start_minute'])),
-            'session_end': make_dt(time(session_config['end_hour'], session_config['end_minute'])),
+            'session_start': make_dt(session_config['trading_start']),
+            'session_end': make_dt(session_config['trading_end']),
         }
     
     def is_in_trading_hours(self, current_time: datetime) -> bool:
@@ -402,40 +409,40 @@ class ConfigValidator:
         # Validate bias_filter
         bias_filter = config.get('bias_filter', {})
         if 'buy_threshold' not in bias_filter:
-            errors.append("Missing 'bias_filter.buy_threshold'")
+            errors.append("Missing required section 'bias_filter.buy_threshold'")
         elif not 0 <= bias_filter['buy_threshold'] <= 1:
             errors.append("'bias_filter.buy_threshold' must be between 0 and 1")
         
         if 'sell_threshold' not in bias_filter:
-            errors.append("Missing 'bias_filter.sell_threshold'")
+            errors.append("Missing required section 'bias_filter.sell_threshold'")
         elif not 0 <= bias_filter['sell_threshold'] <= 1:
             errors.append("'bias_filter.sell_threshold' must be between 0 and 1")
         
-        if bias_filter['buy_threshold'] <= bias_filter['sell_threshold']:
+        if bias_filter.get('buy_threshold', 1) <= bias_filter.get('sell_threshold', 0):
             errors.append("'buy_threshold' must be greater than 'sell_threshold'")
         
         # Validate entry_conditions
         entry_conditions = config.get('entry_conditions', {})
         if 'velocity_multiplier' not in entry_conditions:
-            errors.append("Missing 'entry_conditions.velocity_multiplier'")
+            errors.append("Missing required section 'entry_conditions.velocity_multiplier'")
         elif entry_conditions['velocity_multiplier'] < 1:
             errors.append("'velocity_multiplier' must be >= 1")
         
-        if 'lookback_period' not in entry_conditions:
-            errors.append("Missing 'entry_conditions.lookback_period'")
-        elif entry_conditions['lookback_period'] < 60:
-            errors.append("'lookback_period' must be at least 60 seconds")
+        if 'lookback_seconds' not in entry_conditions:
+            errors.append("Missing required section 'entry_conditions.lookback_seconds'")
+        elif entry_conditions['lookback_seconds'] < 60:
+            errors.append("'lookback_seconds' must be at least 60 seconds")
         
         # Validate risk_management
         risk = config.get('risk_management', {})
-        if 'initial_sl' not in risk:
-            errors.append("Missing 'risk_management.initial_sl'")
-        elif risk['initial_sl'] <= 0:
-            errors.append("'initial_sl' must be positive")
+        if 'initial_sl_pips' not in risk:
+            errors.append("Missing required section 'risk_management.initial_sl_pips'")
+        elif risk['initial_sl_pips'] <= 0:
+            errors.append("'initial_sl_pips' must be positive")
         
         trailing_stages = risk.get('trailing_stages', [])
         if not trailing_stages:
-            errors.append("Missing 'risk_management.trailing_stages'")
+            errors.append("Missing required section 'risk_management.trailing_stages'")
         else:
             last_max = -1
             for i, stage in enumerate(trailing_stages):
@@ -446,8 +453,8 @@ class ConfigValidator:
                 elif not (-1 <= stage['retention'] <= 1):
                     errors.append(f"Stage {i}: 'retention' must be between -1 and 1")
                 
-                if stage['min_profit'] <= last_max:
-                    errors.append(f"Stage {i}: 'min_profit' must be greater than previous stage's max")
+                if (stage['min_profit'] != last_max) and (i != 0):
+                    errors.append(f"Stage {i}: 'min_profit' must be equal to previous stage's max")
                 
                 if 'max_profit' in stage:
                     if stage['max_profit'] <= stage['min_profit']:
@@ -459,13 +466,20 @@ class ConfigValidator:
         required_times = ['day_open', 'ghost_start', 'ghost_end']
         for time_key in required_times:
             if time_key not in session:
-                errors.append(f"Missing 'session.{time_key}'")
-            elif not isinstance(session[time_key], time):
-                errors.append(f"'session.{time_key}' must be a datetime.time object")
+                errors.append(f"Missing required section 'session.{time_key}'")
+            else:
+                try:
+                    hr, mn = (int(t) for t in config['session'][time_key].split(":"))
+                    if not 0 <= hr <= 23: raise ValueError()
+                    if not 0<= mn <= 59: raise ValueError()
+                except Exception as e:
+                    errors.append(f"'session.{time_key}' must be in HH:MM format")
         
         if 'ghost_start' in session and 'ghost_end' in session:
             if session['ghost_start'] >= session['ghost_end']:
                 errors.append("'ghost_start' must be before 'ghost_end'")
+        if session.get('trading_start', '5:00') >= session.get('trading_end', '5:00'):
+            errors.append("'tradining_start' must be before 'trading_end")
         
         return errors
 
@@ -490,12 +504,12 @@ CONFIG = {
         'sell_threshold': 0.4
     }, 
     'entry_conditions': {
-        '15min_buffer': 10, 
+        'buffer_pips': 10, 
         'velocity_multiplier': 2, 
-        'lookback_period': 60*60
+        'lookback_seconds': 60*60
     }, 
     'risk_management': {
-        'initial_sl': 50, 
+        'initial_sl_pips': 50, 
         'trailing_stages': [
             {'min_profit': 0,   'max_profit': 30,  'retention': -1}, 
             {'min_profit': 30,  'max_profit': 60,  'retention': 0.5}, 
@@ -506,13 +520,11 @@ CONFIG = {
         ]
     },
     'session': {
-        'day_open': time(9, 0),
-        'start_hour': 10, 
-        'start_minute': 0,
-        'end_hour': 17, 
-        'end_minute': 0,
-        'ghost_start': time(8, 0),
-        'ghost_end': time(8, 30)
+        'day_open': '9:00',
+        'trading_start': '10:00',
+        'trading_end': '17:00',
+        'ghost_start': '8:00',
+        'ghost_end': '8:30'
     },
     'logging': {
         'level': 'INFO',
@@ -786,7 +798,7 @@ class OptimizedStrategyState:
             return 0.0
         
         if contract_size not in self._buffer_cache:
-            buffer = CONFIG['entry_conditions']['15min_buffer'] / contract_size
+            buffer = CONFIG['entry_conditions']['buffer_pips'] / contract_size
             self._buffer_cache[contract_size] = buffer
             self._last_buffer_calc = t_mod.time()
         
@@ -1093,12 +1105,12 @@ def main():
     
     contract_size = info['contract_size']
     logger.info(f"Symbol {symbol} loaded, contract size: {contract_size}")
-    logger.info(f"Session hours: {CONFIG['session']['start_hour']:02d}:{CONFIG['session']['start_minute']:02d} - "
-                f"{CONFIG['session']['end_hour']:02d}:{CONFIG['session']['end_minute']:02d}")
+    logger.info(f"Session hours: {CONFIG['session']['trading_start']} - "
+                f"{CONFIG['session']['trading_end']}")
 
     # Initialize state and monitoring
     state = OptimizedStrategyState(symbol)
-    velocity = OptimizedVelocityMonitor(symbol, CONFIG['entry_conditions']['lookback_period'])
+    velocity = OptimizedVelocityMonitor(symbol, CONFIG['entry_conditions']['lookback_seconds'])
     
     logger.info("Optimized trading started")
     
@@ -1265,7 +1277,7 @@ def main():
                             logger.info(f"Buy entry: Price={tick_info.ask:.5f} >= {upper_target:.5f}")
                             success, price = safe_mt5_call(
                                 execute_trade_with_cache, symbol, symbol_info_cache, 'buy', 
-                                CONFIG['risk_management']['initial_sl']
+                                CONFIG['risk_management']['initial_sl_pips']
                             )
                             if success:
                                 state.in_trade = True
@@ -1290,7 +1302,7 @@ def main():
                             logger.info(f"Sell entry: Price={tick_info.bid:.5f} <= {lower_target:.5f}")
                             success, price = safe_mt5_call(
                                 execute_trade_with_cache, symbol, symbol_info_cache, 'sell',
-                                CONFIG['risk_management']['initial_sl']
+                                CONFIG['risk_management']['initial_sl_pips']
                             )
                             if success:
                                 state.in_trade = True

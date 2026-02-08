@@ -65,7 +65,7 @@ class TestConfigValidator:
         }
         
         errors = ConfigValidator.validate_config(config)
-        assert any("buy_threshold must be greater" in error for error in errors)
+        assert any("'buy_threshold' must be greater" in error for error in errors)
     
     def test_missing_required_section(self):
         """Test validation of missing required section."""
@@ -114,7 +114,7 @@ class TestConfigValidator:
         }
         
         errors = ConfigValidator.validate_config(config)
-        assert any("must be after" in error for error in errors)
+        assert any("must be before" in error for error in errors)
 
 
 class TestDateTimeUtils:

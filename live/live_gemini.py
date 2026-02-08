@@ -32,11 +32,11 @@ CONFIG = {
     'bias_filter': {'buy_threshold': 0.75, 'sell_threshold': 0.25},
     'entry_conditions': {
         'velocity_multiplier': 1.8,
-        'lookback_period': 60 * 60,  # In seconds (approx matching rolling window)
-        '15min_buffer': 10.0     # Points buffer for ghost range
+        'lookback_seconds': 60 * 60,  # In seconds (approx matching rolling window)
+        'buffer_pips': 10.0     # Points buffer for ghost range
     },
     'risk_management': {
-        'initial_sl': 50.0,     # Points
+        'initial_sl_pips': 50.0,     # Points
         'trailing_stages': [
             {'min_profit': 0, 'max_profit': np.int64(30), 'retention': -1}, 
             {'min_profit': np.int64(30), 'max_profit': np.int64(60), 'retention': 0.55}, 
@@ -55,9 +55,9 @@ CONFIG = {
 }
 CONFIG = {
     'bias_filter': {'buy_threshold': 0.6, 'sell_threshold': 0.4}, 
-    'entry_conditions': {'15min_buffer': 10, 'velocity_multiplier': 2, 'lookback_period': 60*60}, 
+    'entry_conditions': {'buffer_pips': 10, 'velocity_multiplier': 2, 'lookback_seconds': 60*60}, 
     'risk_management': {
-        'initial_sl': 50, 
+        'initial_sl_pips': 50, 
         'trailing_stages': [
             {'min_profit': 0,   'max_profit': 30,  'retention': -1}, 
             {'min_profit': 30,  'max_profit': 60,  'retention': 0.5}, 
@@ -466,7 +466,7 @@ def main():
         return
 
     state = StrategyState()
-    velocity = VelocityMonitor(symbol, lookback_seconds=CONFIG['entry_conditions']['lookback_period'])
+    velocity = VelocityMonitor(symbol, lookback_seconds=CONFIG['entry_conditions']['lookback_seconds'])
     contract_size = mt5.symbol_info(symbol).trade_contract_size
     
     print(f"Live Trading Started on {symbol}...")
@@ -628,7 +628,7 @@ def main():
             
             if start_t <= now_cet.time() < end_t:
                 
-                buffer = CONFIG['entry_conditions']['15min_buffer']
+                buffer = CONFIG['entry_conditions']['buffer_pips']
                 buffer /= contract_size
                 
                 # BUY LOGIC
@@ -653,7 +653,7 @@ def main():
                                     print(now_cet)
                                     print(f"Entering Buy")
                                     # continue
-                                    success, price = execute_trade(symbol, contract_size, 'buy', CONFIG['risk_management']['initial_sl'])
+                                    success, price = execute_trade(symbol, contract_size, 'buy', CONFIG['risk_management']['initial_sl_pips'])
                                     if success:
                                         state.in_trade = True
                                         state.entry_price = price
@@ -678,7 +678,7 @@ def main():
                                     print(now_cet)
                                     print(f"Entering Sell")
                                     # continue
-                                    success, price = execute_trade(symbol, contract_size, 'sell', CONFIG['risk_management']['initial_sl'])
+                                    success, price = execute_trade(symbol, contract_size, 'sell', CONFIG['risk_management']['initial_sl_pips'])
                                     if success:
                                         state.in_trade = True
                                         state.entry_price = price
