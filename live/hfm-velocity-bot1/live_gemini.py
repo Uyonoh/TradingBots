@@ -118,6 +118,8 @@ class VelocityMonitor:
     def get_ticks(self, server_time=None):
         server_time = datetime.fromtimestamp(server_time, tz=timezone.utc)
         ticks = mt5.copy_ticks_from(self.symbol, server_time, 10000, mt5.COPY_TICKS_ALL)
+        if ticks is None:
+            return np.array([])
         return ticks[1:]
     
     def get_tick_timestamps(self, server_time=None):
@@ -237,7 +239,11 @@ def get_server_timezone(year=None, month=None, day=None):
 def get_server_time(symbol):
         utc_now = datetime.now(UTC)
         # Error: remove hardcodded hours, should be dynamic
+        i = 0
         tick = mt5.symbol_info_tick(symbol)
+        while tick is None and i < MAX_RETRIES:
+            tick = mt5.symbol_info_tick(symbol)
+            i += 1
         # server_time = datetime.fromtimestamp(tick.time)
         server_time = pd.to_datetime(tick.time, unit='s')
         zone = get_server_timezone()
