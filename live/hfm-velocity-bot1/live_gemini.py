@@ -287,8 +287,8 @@ def touched_opposite(symbol, bias, target):
         UTC3: 3,
     }
     server_zone = get_server_timezone()
-    start_dt = start_dt + timedelta(hours=zones[server_zone])
-    end_dt   = end_dt   + timedelta(hours=zones[server_zone])
+    start_dt = start_dt + timedelta(hours=zones[server_zone] - 1)
+    end_dt   = end_dt   + timedelta(hours=zones[server_zone] - 1)
 
     rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, end_dt)
     if rates is None or len(rates) == 0:
@@ -324,8 +324,8 @@ def get_ghost_range(symbol, today_date):
         UTC3: 3,
     }
     server_zone = get_server_timezone()
-    start_dt = start_dt + timedelta(hours=zones[server_zone])
-    end_dt   = end_dt   + timedelta(hours=zones[server_zone])
+    start_dt = start_dt + timedelta(hours=zones[server_zone] - 1)
+    end_dt   = end_dt   + timedelta(hours=zones[server_zone] - 1)
 
     rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, end_dt)
     if rates is None or len(rates) == 0:
@@ -349,7 +349,7 @@ def get_frankfurt_open(symbol, today_date):
         UTC3: 3,
     }
     server_zone = get_server_timezone()
-    start_dt = start_dt + timedelta(hours=zones[server_zone])
+    start_dt = start_dt + timedelta(hours=zones[server_zone] - 1)
 
     rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, start_dt)
     if rates is None or len(rates) == 0:
