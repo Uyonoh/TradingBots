@@ -1,0 +1,2 @@
+@echo off
+for %%a in (ger40, usa30, gbpusd, usa100, usa500, uk100, uk500, #btcusd, #ethusd) do start "%%a" cmd /k "mode con: cols=60 lines=20 & ..\.venv\Scripts\python.exe deep_live.py %%a --log-level DEBUG"

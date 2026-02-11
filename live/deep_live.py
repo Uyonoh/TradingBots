@@ -495,7 +495,7 @@ TIMEOUT = 1
 # Trading parameters
 VOLUME = 0.01
 DEVIATION = 10
-MAGIC_NUM = 1234569
+MAGIC_NUM = 123
 
 # Configuration
 CONFIG = {
@@ -678,6 +678,7 @@ class OptimizedVelocityMonitor:
             return False
         
         is_high = current_density > (avg_density * multiplier)
+        self.logger.debug(f"Querying velocity: {is_high}: {current_density} || {avg_density * multiplier} [{avg_density} X {multiplier}]")
         if is_high:
             self.logger.debug(
                 f"High velocity: {current_density:.2f} > {avg_density:.2f} × {multiplier}"
@@ -1004,7 +1005,7 @@ def execute_trade_with_cache(
         "sl": sl_price,
         "deviation": DEVIATION,
         "magic": MAGIC_NUM,
-        "comment": "LiveDemo_Bot",
+        "comment": "LiveDemo_Bot[DEEP]",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling,
     }
@@ -1021,6 +1022,49 @@ def execute_trade_with_cache(
     
     logger.info(f"Trade executed: {direction} at {result.price:.5f}, ticket: {result.order}")
     return True, result.price
+
+
+@retry(max_attempts=2, delay=1.0, exceptions=(OrderExecutionError,), logger=logger)
+def modify_sl(self, ticket, new_sl):
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": self.symbol,
+            "position": ticket,
+            "sl": new_sl,
+            "magic": MAGIC_NUM
+        }
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            raise OrderExecutionError(f"SL modification Failed: {result.comment} (retcode: {result.retcode})")
+
+        self.logger.info(f"Modified sl to {new_sl:.2f}")
+
+@retry(max_attempts=3, delay=1.0, exceptions=(OrderExecutionError,), logger=logger)
+def close_positions(symbol):
+    """Closes all positions with our Magic Number"""
+    positions = safe_mt5_call(mt5.positions_get, symbol)
+    for pos in positions:
+        if pos.magic == MAGIC_NUM:
+            tick = mt5.symbol_info_tick(symbol)
+            if tick is None:
+                error = mt5.last_error()
+                raise OrderExecutionError(f"Cannot get tick for {symbol}: {error}")
+
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": pos.volume,
+                "type": mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY,
+                "position": pos.ticket,
+                "price": tick.bid if pos.type == mt5.ORDER_TYPE_BUY else tick.ask, # Error: Might need to add padding
+                "deviation": DEVIATION,
+                "magic": MAGIC_NUM,
+                "comment": "Mandatory Close"
+            }
+            result = mt5.order_send(request)
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                raise OrderExecutionError(f"Mandatory position close Failed: {result.comment} (retcode: {result.retcode})")
+            logger.info("Mandatory Close Executed")
 
 
 def safe_mt5_call(func: Callable, *args, **kwargs) -> Any:
@@ -1126,6 +1170,7 @@ def main():
     tick_interval = perf_config['tick_processing_interval']
     velocity_interval = perf_config['velocity_update_interval']
     position_check_interval = perf_config['position_check_interval']
+    last_position_check -= position_check_interval
     outside_session_sleep = perf_config['outside_session_sleep']
     
     try:
@@ -1206,8 +1251,7 @@ def main():
             if current_time - last_position_check >= position_check_interval:
                 positions = safe_mt5_call(mt5.positions_get, symbol=symbol)
                 last_position_check = current_time
-            else:
-                positions = []
+            
             
             if positions is None:
                 positions = []
@@ -1225,7 +1269,7 @@ def main():
                 # Mandatory Close (Time)
                 if server_time >= session_times['session_end']:
                     logger.info(f"Mandatory close triggered: {server_time}")
-                    safe_mt5_call(mt5.positions_close, pos.ticket)
+                    safe_mt5_call(close_positions, symbol)
                     continue
                 
                 # Trailing Stop Logic
@@ -1235,6 +1279,7 @@ def main():
                     current_profit_points = (pos.price_open - tick_info.ask) * contract_size
                 
                 if current_profit_points > state.max_pnl:
+                    logger.debug(f"{current_profit_points} > {state.max_pnl}")
                     state.max_pnl = current_profit_points
                     logger.debug(f"New max profit: {state.max_pnl:.2f} pips")
                 
@@ -1249,10 +1294,8 @@ def main():
                         else:
                             new_sl = pos.price_open - trail_dist
                             should_modify = (pos.sl == 0 or new_sl < pos.sl)
-                        
                         if should_modify:
-                            logger.info(f"Modifying SL to {new_sl:.5f}")
-                            safe_mt5_call(mt5.order_modify, pos.ticket, sl=new_sl)
+                            safe_mt5_call(modify_sl, symbol, pos.ticket, new_sl=new_sl)
                             break
             
             # Entry Logic
@@ -1334,10 +1377,11 @@ def main():
         try:
             positions = safe_mt5_call(mt5.positions_get, symbol=symbol)
             if positions:
-                logger.info(f"Closing {len(positions)} positions...")
-                for pos in positions:
-                    if pos.magic == MAGIC_NUM:
-                        safe_mt5_call(mt5.positions_close, pos.ticket)
+                choice = input (f"Close {len(positions)} active positions? [y/n]")
+                if choice.strip().lower() in ["y", "yes"]:
+                    logger.info(f"Closing {len(positions)} positions...")
+                    safe_mt5_call(close_positions, symbol)
+                        
         except Exception as e:
             logger.error(f"Error closing positions: {e}")
         

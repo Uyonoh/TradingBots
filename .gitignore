@@ -11,6 +11,8 @@ wheels/
 
 # Environment
 .env
+*.key
+*.pub
 
 # Database
 makedb.py

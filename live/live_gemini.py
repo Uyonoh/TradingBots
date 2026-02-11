@@ -404,6 +404,8 @@ def execute_trade(symbol, contract_size, direction, sl_pips):
 def close_position(symbol):
     """Closes all positions with our Magic Number"""
     positions = mt5.positions_get(symbol)
+    if positions is None:
+        return
     for pos in positions:
         if pos.magic == MAGIC_NUM:
             tick = mt5.symbol_info_tick(symbol)
@@ -650,6 +652,9 @@ def main():
                                 # High Velocity
                                 if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']):
                                     print(f"Price >= {upper_target} and  > {state.daily_open_price}")
+                                    current_density = len(velocity.tick_timestamps) / 30.0
+                                    avg_density = sum(velocity.density_history) / len(velocity.density_history)
+                                    print(f"Cur Den: {current_density} || AVG x M: {avg_density * CONFIG['entry_conditions']['velocity_multiplier']}")
                                     print(now_cet)
                                     print(f"Entering Buy")
                                     # continue
