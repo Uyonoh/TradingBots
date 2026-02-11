@@ -520,8 +520,8 @@ def main():
             velocity.update_history()
             last_update_seconds = t_mod.time()
 
-            if (datetime.now().time().minute % 5 == 0) and (datetime.now().time().second == 0):
-                print(f"Tick velosity density at {datetime.now().time()}: {velocity.density_history[-1]} || AVG: {avg_vel}")
+            if (now_cet.minute % 5 == 0) and (now_cet.time().second == 0):
+                print(f"Tick velosity density at {now_cet.time()}: {velocity.density_history[-1]} || AVG: {avg_vel}")
 
         # 5. Logic Gates
         
