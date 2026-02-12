@@ -1,5 +1,4 @@
 import argparse
-import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
 import pytz
@@ -17,6 +16,17 @@ from typing import Optional, Dict, Any, List, Tuple, Callable, Union
 from functools import wraps, lru_cache
 from dataclasses import dataclass
 from enum import Enum
+
+if sys.platform == "linux":
+    from mt5linux import MetaTrader5
+    mt5 = MetaTrader5()
+    islinux = True
+elif sys.platform == "win32":
+    import MetaTrader5 as mt5
+    islinux = False
+else:
+    raise RuntimeError(f"Unknown platform {sys.platform}. Must be 'win32' or 'linux'")
+
 
 dotenv.load_dotenv()
 
@@ -156,7 +166,7 @@ class DateTimeUtils:
     # Timezone constants
     CET = pytz.timezone('Europe/Berlin')
     UTC = pytz.utc
-    LOCAL_TIME = pytz.timezone('Africa/Lagos')
+    LOCAL_TIME = pytz.timezone('Europe/London') if islinux else pytz.timezone('Africa/Lagos')
 
     @staticmethod
     def parse_time(t: str):
@@ -610,6 +620,7 @@ class OptimizedVelocityMonitor:
                 return np.array([])
         
         # Use a larger batch size but limit frequency
+        server_time = datetime.fromtimestamp(server_time, tz=timezone.utc)
         ticks = np.asarray([t for t in mt5.copy_ticks_from(self.symbol, server_time, 5000, mt5.COPY_TICKS_ALL) if t['time_msc']/1000 > server_time])
         if ticks is None or len(ticks) == 0:
             return np.array([])
@@ -854,7 +865,7 @@ def to_mt5_time(dt: datetime) -> datetime:
         # Assuming dt is in local timezone
         dt = DateTimeUtils.LOCAL_TIME.localize(dt)
     # Convert to servertime and replace tz with utc so the epoch times register correctly
-    dt = dt.astimezone(TimeCache.get_timezone()).replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(SERVER_TIMEZONE).replace(tzinfo=timezone.utc)
     return dt
 
 

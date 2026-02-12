@@ -1,5 +1,4 @@
 import argparse
-from mt5linux import MetaTrader5
 import pandas as pd
 import numpy as np
 import pytz
@@ -8,7 +7,17 @@ import calendar
 import time as t_mod
 from collections import deque
 import os
+import sys
 import dotenv
+
+if sys.platform == "linux":
+    from mt5linux import MetaTrader5
+    mt5 = MetaTrader5()
+elif sys.platform == "win32":
+    import MetaTrader5 as mt5
+else:
+    raise RuntimeError(f"Unknown platform {sys.platform}. Must be 'win32' or 'linux'")
+
 dotenv.load_dotenv()
 
 # Error: Check direction during high velocity, might be opposing
@@ -16,8 +25,6 @@ dotenv.load_dotenv()
 # -------------------------------------------------------------------
 # CONFIGURATION
 # -------------------------------------------------------------------
-mt5 = MetaTrader5()
-
 LOGIN = int(os.environ["ACCOUNT_ID"])
 PASSWORD = os.environ["PASSWORD"]
 SERVER = os.environ["SERVER"]
@@ -244,6 +251,8 @@ def get_server_time(symbol):
         while tick is None and i < MAX_RETRIES:
             tick = mt5.symbol_info_tick(symbol)
             i += 1
+        if tick is None:
+            raise ConnectionError("Failed to get symbol data")
         # server_time = datetime.fromtimestamp(tick.time)
         server_time = pd.to_datetime(tick.time, unit='s')
         zone = get_server_timezone()

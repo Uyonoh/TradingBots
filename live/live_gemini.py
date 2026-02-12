@@ -1,5 +1,4 @@
 import argparse
-import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
 import pytz
@@ -8,7 +7,19 @@ import calendar
 import time as t_mod
 from collections import deque
 import os
+import sys
 import dotenv
+
+if sys.platform == "linux":
+    from mt5linux import MetaTrader5
+    mt5 = MetaTrader5()
+    islinux = True
+elif sys.platform == "win32":
+    import MetaTrader5 as mt5
+    islinux = False
+else:
+    raise RuntimeError(f"Unknown platform {sys.platform}. Must be 'win32' or 'linux'")
+
 dotenv.load_dotenv()
 
 # Error: Check direction during high velocity, might be opposing
@@ -25,7 +36,7 @@ TIMEOUT = 1
 # symbol = "GBPUSD"  # Update for your broker (e.g., DE40, DAX40)
 VOLUME = 0.01      # Lot size
 DEVIATION = 10    # Slippage tolerance in points
-MAGIC_NUM = 1234569
+MAGIC_NUM = 0
 
 # Strategy Parameters (Matching your backtest)
 CONFIG = {
@@ -80,6 +91,7 @@ CET = pytz.timezone('Europe/Berlin')
 UTC = pytz.utc
 UTC2 = pytz.timezone('Europe/Athens') # EET / CAT
 UTC3 = pytz.timezone('Asia/Baghdad') # EAT / MST
+LOCAL_ZONE = datetime.now(UTC).astimezone().tzinfo.tzname
 
 # -------------------------------------------------------------------
 # HELPER CLASSES
@@ -114,7 +126,10 @@ class VelocityMonitor:
             
 
     def get_ticks(self, server_time=None):
+        server_time = datetime.fromtimestamp(server_time, tz=timezone.utc)
         ticks = mt5.copy_ticks_from(self.symbol, server_time, 10000, mt5.COPY_TICKS_ALL)
+        if ticks is None:
+            return np.array([])
         return ticks[1:]
     
     def get_tick_timestamps(self, server_time=None):
@@ -234,7 +249,13 @@ def get_server_timezone(year=None, month=None, day=None):
 def get_server_time(symbol):
         utc_now = datetime.now(UTC)
         # Error: remove hardcodded hours, should be dynamic
+        i = 0
         tick = mt5.symbol_info_tick(symbol)
+        while tick is None and i < MAX_RETRIES:
+            tick = mt5.symbol_info_tick(symbol)
+            i += 1
+        if tick is None:
+            raise ConnectionError("Failed to get symbol data")
         # server_time = datetime.fromtimestamp(tick.time)
         server_time = pd.to_datetime(tick.time, unit='s')
         zone = get_server_timezone()
@@ -275,7 +296,7 @@ def calculate_daily_bias(symbol):
     return "straddle"
 
 def touched_opposite(symbol, bias, target):
-    today = datetime.now()
+    today = get_server_time_cet(symbol).date()
     start_dt = datetime.combine(today, CONFIG['session']['day_open'])
     end_dt = today
 
@@ -284,8 +305,10 @@ def touched_opposite(symbol, bias, target):
         UTC3: 3,
     }
     server_zone = get_server_timezone()
-    start_dt = start_dt + timedelta(hours=zones[server_zone])
-    end_dt   = end_dt   + timedelta(hours=zones[server_zone])
+    # Linux ser is in Londono (UTC) -1 from Local machine(UTC+1)
+    offset = 1 if islinux else 0
+    start_dt = start_dt + timedelta(hours=zones[server_zone] - offset)
+    end_dt   = end_dt   + timedelta(hours=zones[server_zone] - offset)
 
     rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, end_dt)
     if rates is None or len(rates) == 0:
@@ -321,8 +344,9 @@ def get_ghost_range(symbol, today_date):
         UTC3: 3,
     }
     server_zone = get_server_timezone()
-    start_dt = start_dt + timedelta(hours=zones[server_zone])
-    end_dt   = end_dt   + timedelta(hours=zones[server_zone])
+    offset = 1 if islinux else 0
+    start_dt = start_dt + timedelta(hours=zones[server_zone] - offset)
+    end_dt   = end_dt   + timedelta(hours=zones[server_zone] - offset)
 
     rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, end_dt)
     if rates is None or len(rates) == 0:
@@ -346,7 +370,8 @@ def get_frankfurt_open(symbol, today_date):
         UTC3: 3,
     }
     server_zone = get_server_timezone()
-    start_dt = start_dt + timedelta(hours=zones[server_zone])
+    offset = 1 if islinux else 0
+    start_dt = start_dt + timedelta(hours=zones[server_zone] - offset)
 
     rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, start_dt)
     if rates is None or len(rates) == 0:
@@ -520,7 +545,7 @@ def main():
             velocity.update_history()
             last_update_seconds = t_mod.time()
 
-            if (now_cet.minute % 5 == 0) and (now_cet.time().second == 0):
+            if (now_cet.minute % 5 == 0) and (now_cet.second == 0):
                 print(f"Tick velosity density at {now_cet.time()}: {velocity.density_history[-1]} || AVG: {avg_vel}")
 
         # 5. Logic Gates
