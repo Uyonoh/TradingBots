@@ -166,6 +166,7 @@ class DateTimeUtils:
     # Timezone constants
     CET = pytz.timezone('Europe/Berlin')
     UTC = pytz.utc
+    UTC1 = pytz.timezone('Africa/Lagos')
     LOCAL_TIME = pytz.timezone('Europe/London') if islinux else pytz.timezone('Africa/Lagos')
 
     @staticmethod
@@ -223,9 +224,11 @@ class SessionTimeManager:
         # Helper function to create localized datetime
         def make_dt(t: str) -> datetime:
             format = "%H:%M"
-            tz= DateTimeUtils.LOCAL_TIME
+            base_tz = DateTimeUtils.UTC1 # TZ base for time
+            tz= DateTimeUtils.LOCAL_TIME # Return tz
             t = datetime.strptime(t, format).time()
-            return DateTimeUtils.combine_date_time(for_date, t, tz)
+            dt = DateTimeUtils.combine_date_time(for_date, t, base_tz)
+            return dt.astimezone(tz)
         
         session_config = self.config['session']
         
