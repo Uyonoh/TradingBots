@@ -240,6 +240,12 @@ class SessionTimeManager:
             'session_end': make_dt(session_config['trading_end']),
         }
     
+    def is_in_pretrading_hours(self, current_time: datetime) -> bool:
+        """Check if current time is within pretrading hours. (3 hours before)"""
+        session_times = self.get_session_times(current_time.date())
+        h = CONFIG['session']['pre-trading']
+        return session_times['session_start'] - timedelta(hours=h) <= current_time < session_times['session_end']
+    
     def is_in_trading_hours(self, current_time: datetime) -> bool:
         """Check if current time is within trading hours."""
         session_times = self.get_session_times(current_time.date())
@@ -533,6 +539,7 @@ CONFIG = {
         ]
     },
     'session': {
+        'pre-trading': 3, # Hours
         'day_open': '9:00',
         'trading_start': '10:00',
         'trading_end': '17:00',
@@ -1210,10 +1217,10 @@ def main():
             server_tz = TimeCache.get_timezone(server_time.date())
             server_time = server_tz.localize(server_time) if server_time.tzinfo is None else server_time.astimezone(server_tz)
             
-            # Check if we're in trading hours
-            if not session_time_manager.is_in_trading_hours(server_time):
+            # Check if we're into pretrading hours
+            if not session_time_manager.is_in_pretrading_hours(server_time):
                 # Outside trading hours - sleep longer
-                logger.debug(f"Outside trading hours: {server_time}")
+                logger.debug(f"Outside pre-trading hours: {server_time}")
                 t_mod.sleep(outside_session_sleep)
                 continue
             
@@ -1242,6 +1249,13 @@ def main():
                     logger.info(f"Velocity metrics: {metrics}")
                     last_metrics_log = current_time
             
+            # Check if we're in trading hours
+            if not session_time_manager.is_in_trading_hours(server_time):
+                # Outside trading hours - sleep longer
+                logger.debug(f"Outside trading hours: {server_time}")
+                t_mod.sleep(outside_session_sleep)
+                continue
+
             # Get session times for today
             session_times = session_time_manager.get_session_times(today_date)
             
