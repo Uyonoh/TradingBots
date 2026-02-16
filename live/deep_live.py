@@ -631,7 +631,7 @@ class OptimizedVelocityMonitor:
         
         # Use a larger batch size but limit frequency
         server_time = datetime.fromtimestamp(server_time, tz=timezone.utc)
-        ticks = np.asarray([t for t in mt5.copy_ticks_from(self.symbol, server_time, 5000, mt5.COPY_TICKS_ALL) if t['time_msc']/1000 > server_time])
+        ticks = np.asarray([t for t in mt5.copy_ticks_from(self.symbol, server_time, 5000, mt5.COPY_TICKS_ALL) if t['time_msc'] > server_time.timestamp()])
         if ticks is None or len(ticks) == 0:
             return np.array([])
         
