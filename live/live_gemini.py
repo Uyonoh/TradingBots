@@ -471,10 +471,12 @@ def main():
     parser = argparse.ArgumentParser(description="Live trading momentum based bot for HFM")
 
     parser.add_argument("symbol", help="symbol to be traded")
+    parser.add_argument("--magic", type=int, default=0, help="Unique magic number for bot")
 
     args = parser.parse_args()
 
     symbol = args.symbol.strip().upper()
+    # MAGIC_NUM = args.magic
 
     if not mt5.initialize():
         err = mt5.last_error()
@@ -499,6 +501,7 @@ def main():
     print(f"Live Trading Started on {symbol}...")
     
     last_update_seconds = t_mod.time()
+    logged_m = 0
 
     while True:
         # 1. Hardware Efficiency: Sleep to reduce CPU usage
@@ -545,7 +548,8 @@ def main():
             velocity.update_history()
             last_update_seconds = t_mod.time()
 
-            if (now_cet.minute % 5 == 0) and (now_cet.second == 0):
+            if (now_cet.minute % 5 == 0) and (now_cet.minute != logged_m):
+                logged_m = now_cet.minute
                 print(f"Tick velosity density at {now_cet.time()}: {velocity.density_history[-1]} || AVG: {avg_vel}")
 
         # 5. Logic Gates
