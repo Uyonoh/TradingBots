@@ -296,8 +296,8 @@ def calculate_daily_bias(symbol):
     return "straddle"
 
 def touched_opposite(symbol, bias, target):
-    today = get_server_time_cet(symbol).date()
-    start_dt = datetime.combine(today, CONFIG['session']['day_open'])
+    today = get_server_time_cet(symbol)
+    start_dt = datetime.combine(today.date(), CONFIG['session']['day_open'])
     end_dt = today
 
     zones = {
@@ -312,7 +312,7 @@ def touched_opposite(symbol, bias, target):
 
     rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, end_dt)
     if rates is None or len(rates) == 0:
-        print("Error fetching M1 data for opposite confirmation")
+        print(f"Error fetching M1 data for opposite confirmation: {mt5.last_error()}")
         return False
 
     for r in rates:
@@ -320,9 +320,11 @@ def touched_opposite(symbol, bias, target):
 
         if bias == "buy":
             if low <= target:
+                print("Touched Opposite (Buy setup)")
                 return True
         else:
             if high >= target:
+                print("Touched Opposite (Sell setup)")
                 return True
     return False
 
@@ -497,6 +499,8 @@ def main():
     state = StrategyState()
     velocity = VelocityMonitor(symbol, lookback_seconds=CONFIG['entry_conditions']['lookback_seconds'])
     contract_size = mt5.symbol_info(symbol).trade_contract_size
+    buffer = CONFIG['entry_conditions']['buffer_pips']
+    buffer /= contract_size
     
     print(f"Live Trading Started on {symbol}...")
     
@@ -561,6 +565,9 @@ def main():
                 if g_min:
                     state.ghost_low = g_min
                     state.ghost_high = g_max
+
+                    target = g_min + buffer if state.bias == "buy" else g_max - buffer
+                    state.touched_opposite = touched_opposite(symbol, state.bias, target)
                     print(f"Ghost Range Locked: {g_min} - {g_max}")
                 else:
                     print("Waiting for Ghost Data...")
@@ -658,9 +665,6 @@ def main():
             end_t = time(CONFIG['session']['end_hour'], CONFIG['session']['end_minute'])
             
             if start_t <= now_cet.time() < end_t:
-                
-                buffer = CONFIG['entry_conditions']['buffer_pips']
-                buffer /= contract_size
                 
                 # BUY LOGIC
                 if state.bias == 'buy':

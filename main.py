@@ -250,7 +250,7 @@ class TradingBot:
             if abs(row["entry_price"] - data["entry"]) <= 50:
                 self.logger.info("%s order for %s from %s at %s", row["side"], row["symbol"], row["entry_price"], row["entry_time"])
                 self.logger.info("Order price within 50 pips of existing order. Continue trade? [y/n]")
-                if input("").lower == "y":
+                if input("").lower() == "y":
                     break
                 raise ValueError("Aborting order...")
 
