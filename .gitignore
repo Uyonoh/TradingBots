@@ -27,6 +27,7 @@ makedb.py
 # Logging and data
 /dax_ticks
 /tick_data
+/old_data
 *.log
 *.csv
 *.parquet

@@ -177,6 +177,8 @@ class TradingBot:
     symbol_pips = {
         "XAU": 10,
         "GER40": 100,
+        "USA30": 100,
+        "USA100": 100,
         "#BTCUSD": 1000,
         }
     
@@ -286,13 +288,15 @@ class TradingBot:
     
     def doublebanger(self, inputs: dict=None, **kwargs):
         if inputs is None:
-            inputs = self.get_inputs(["spacing_pips", "num_orders"])
+            inputs = self.get_inputs(["num_orders"])
         return doublebanger(self, inputs, **kwargs)
 
-    def daily_banger(self):
+    def daily_banger(self, **kwargs):
         rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_D1, 0, 1)
         day_open = rates[0]["open"]
-        breadth = 550
+        rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_H1, 1, 1)
+        day_open = rates[0]["close"] # H1 open = last close
+        breadth = 65 #140
 
         positions = {
             "top": {
@@ -304,17 +308,29 @@ class TradingBot:
         }
         # sl_pips = args.slpips
         inputs = {
-                "lot_size":0.01, "sl pips": 10, "tp pips": 10,
-                "spacing_pips": 10, "num_orders": 20
+                "lot_size":0.01, "sl pips": 100, "tp pips": 100,
+                "spacing_pips": 10, "num_orders": 10
                 }
         for pos,v in positions.items():
             inputs["entry"] =  v["entry"]
-            positions[pos]["pending_order"] = self.doublebanger(inputs=inputs, confirm=False, autocomplete=True)
+            positions[pos]["positions"] = self.doublebanger(inputs=inputs, confirm=False, autocomplete=True)
+            positions[pos]["pending_order"] = positions[pos]["positions"][0]
 
         # Wait for orders to be filled
         top_filled = False
         bottom_filled = False
-        while not top_filled or bottom_filled:
+
+        sl_pips = inputs["sl pips"]
+        tp_pips = inputs["tp pips"]
+        orders = inputs["num_orders"]
+        lot_size = 0.01
+        symbol_ticks = self.get_symbol_ticks()
+        spread = symbol_ticks.ask - symbol_ticks.bid
+        spacing_pips = tp_pips / orders
+        doubled_pos = [2, 5, 9]
+        
+        
+        while not (top_filled or bottom_filled):
             self.logger.info("Waiting for orders to be filled..")
             time.sleep(2)
 
@@ -330,32 +346,70 @@ class TradingBot:
             self.logger.info(f"{bottom_still_pending=}")
             if not top_still_pending and not top_filled:
                 self.logger.info("Top order filled, making remaining sell orders...")
-                order(
-                    symbol=bot.symbol,
-                    order_type="sell stop",
-                    start_price=positions["top"]["entry"] - inputs["spacing_pips"] * self.pip_value,
-                    spacing_pips=inputs["spacing_pips"],
-                    num_orders=inputs["num_orders"] - 1,
-                    volume_per_order=inputs["lot_size"] ,
-                    stop_loss_pips=inputs["sl pips"],
-                    take_profit_pips=inputs["tp pips"]
+                initial_entry = positions["top"]["entry"]
+                direction = "sell"
+                dir_multiplier = -1 if direction == "buy" else 1
+                initial_entry -= spread
+                for i in range(1, orders):
+                    lots = lot_size
+                    if i in doubled_pos:
+                        lots = lot_size * 2
+                    entry = initial_entry - (i * spacing_pips * dir_multiplier)
+                    tp = tp_pips - (i * orders)
+                    sl = sl_pips
+                
+                    order(
+                        symbol=self.symbol,
+                        order_type=f"{direction} stop",
+                        start_price=entry,
+                        spacing_pips=0,
+                        num_orders=1,
+                        volume_per_order=lots,
+                        stop_loss_pips=sl,
+                        take_profit_pips=tp
                     )
+                    # ==============================================
                 top_filled = True
             
             if not bottom_still_pending and not bottom_filled:
                 self.logger.info("Bottom order filled, making remaining buy orders...")
-                order(
-                    symbol=bot.symbol,
-                    order_type="buy stop",
-                    start_price=positions["top"]["entry"] + inputs["spacing_pips"] * self.pip_value,
-                    spacing_pips=inputs["spacing_pips"],
-                    num_orders=inputs["num_orders"] - 1,
-                    volume_per_order=inputs["lot_size"] ,
-                    stop_loss_pips=inputs["sl pips"],
-                    take_profit_pips=inputs["tp pips"]
+                initial_entry = positions["bottom"]["entry"]
+                direction = "buy"
+                dir_multiplier = -1 if direction == "buy" else 1
+                initial_entry += spread
+                for i in range(1, orders):
+                    lots = lot_size
+                    if i in doubled_pos:
+                        lots = lot_size * 2
+                    entry = initial_entry - (i * spacing_pips * dir_multiplier)
+                    tp = tp_pips - (i * orders)
+                    sl = sl_pips
+                
+                    order(
+                        symbol=self.symbol,
+                        order_type=f"{direction} stop",
+                        start_price=entry,
+                        spacing_pips=0,
+                        num_orders=1,
+                        volume_per_order=lots,
+                        stop_loss_pips=sl,
+                        take_profit_pips=tp
                     )
                 bottom_filled = True
-
+        # When one is filed cancel the other
+        level = "top" if bottom_filled else "bottom"
+        active_tickets = positions[level]["positions"]
+        for i, ticket in enumerate(active_tickets):
+            request = {
+                "action": mt5.TRADE_ACTION_REMOVE,
+                "order": ticket,
+                "comment": "Opposite side filled"
+            }
+            result = mt5.order_send(request)
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                print(f"Order {i+1} failed, ticket={ticket}, retcode={result.retcode}, error={mt5.last_error()}")
+            else:
+                print(f"Canceled order no {i+1}: {ticket}")
 
     
     def __del__(self):
