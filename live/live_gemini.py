@@ -14,9 +14,11 @@ if sys.platform == "linux":
     from mt5linux import MetaTrader5
     mt5 = MetaTrader5()
     islinux = True
+    MAGIC_NUM = "10"
 elif sys.platform == "win32":
     import MetaTrader5 as mt5
     islinux = False
+    MAGIC_NUM = "20"
 else:
     raise RuntimeError(f"Unknown platform {sys.platform}. Must be 'win32' or 'linux'")
 
@@ -36,7 +38,8 @@ TIMEOUT = 1
 # symbol = "GBPUSD"  # Update for your broker (e.g., DE40, DAX40)
 VOLUME = 0.01      # Lot size
 DEVIATION = 10    # Slippage tolerance in points
-MAGIC_NUM = 0
+MAGIC_NUM += "02"
+MAGIC_NUM = int(MAGIC_NUM)
 
 # Strategy Parameters (Matching your backtest)
 CONFIG = {
@@ -297,7 +300,7 @@ def calculate_daily_bias(symbol):
 
 def touched_opposite(symbol, bias, target):
     today = get_server_time_cet(symbol)
-    start_dt = datetime.combine(today.date(), CONFIG['session']['day_open'])
+    start_dt = datetime.combine(today.date(), CONFIG['session']['day_open'], today.tzinfo)
     end_dt = today
 
     zones = {
@@ -309,7 +312,8 @@ def touched_opposite(symbol, bias, target):
     offset = 1 if islinux else 0
     start_dt = start_dt + timedelta(hours=zones[server_zone] - offset)
     end_dt   = end_dt   + timedelta(hours=zones[server_zone] - offset)
-
+    print(start_dt)
+    print(end_dt)
     rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, end_dt)
     if rates is None or len(rates) == 0:
         print(f"Error fetching M1 data for opposite confirmation: {mt5.last_error()}")

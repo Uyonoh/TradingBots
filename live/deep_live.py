@@ -21,9 +21,11 @@ if sys.platform == "linux":
     from mt5linux import MetaTrader5
     mt5 = MetaTrader5()
     islinux = True
+    MAGIC_NUM = "10"
 elif sys.platform == "win32":
     import MetaTrader5 as mt5
     islinux = False
+    MAGIC_NUM = "20"
 else:
     raise RuntimeError(f"Unknown platform {sys.platform}. Must be 'win32' or 'linux'")
 
@@ -514,7 +516,8 @@ TIMEOUT = 1
 # Trading parameters
 VOLUME = 0.01
 DEVIATION = 10
-MAGIC_NUM = 123
+MAGIC_NUM += "01"
+MAGIC_NUM = int(MAGIC_NUM)
 
 # Configuration
 CONFIG = {
