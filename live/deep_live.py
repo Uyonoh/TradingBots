@@ -797,7 +797,7 @@ class OptimizedStrategyState:
         self.ghost_high = None
         self.ghost_low = None
         self.daily_open_price = None
-        self.touched_opposite = False
+        # self.touched_opposite = False
         self.in_trade = False
         self.max_pnl = 0.0
         self.entry_price = 0.0
@@ -826,7 +826,7 @@ class OptimizedStrategyState:
         
         return self._buffer_cache[contract_size]
     
-    def touched_opposite(self):
+    def touched_opposite(self, buffer):
         tick_info = safe_mt5_call(mt5.symbol_info_tick, self.symbol)
         if self.bias == 'buy':
             lower_target = self.ghost_low + buffer
@@ -835,11 +835,6 @@ class OptimizedStrategyState:
             if tick_info.ask <= lower_target and not self.touched_opposite:
                 logger.info(f"Trap: Touched opposite low at {lower_target:.5f}")
                 self.touched_opposite = True
-                if success:
-                    self.in_trade = True
-                    self.entry_price = price
-                    self.direction = 'buy'
-                    self.touched_opposite = False
         
         # SELL LOGIC
         elif self.bias == 'sell':
@@ -1354,15 +1349,15 @@ def main():
             elif state.bias != "straddle" and state.ghost_high is not None and state.daily_open_price is not None:
                 if session_time_manager.is_in_trading_hours(server_time):
                     buffer = state.calculate_buffer(contract_size)
-                    
+                    state.touched_opposite(buffer)
                     # BUY LOGIC
                     if state.bias == 'buy':
-                        lower_target = state.ghost_low + buffer
+                        # lower_target = state.ghost_low + buffer
                         upper_target = state.ghost_high - buffer
                         
-                        if tick_info.ask <= lower_target and not state.touched_opposite:
-                            logger.info(f"Trap: Touched opposite low at {lower_target:.5f}")
-                            state.touched_opposite = True
+                        # if tick_info.ask <= lower_target and not state.touched_opposite:
+                        #     logger.info(f"Trap: Touched opposite low at {lower_target:.5f}")
+                        #     state.touched_opposite = True
                         
                         if (state.touched_opposite and 
                             tick_info.ask >= upper_target and 
@@ -1382,12 +1377,12 @@ def main():
                     
                     # SELL LOGIC
                     elif state.bias == 'sell':
-                        upper_target = state.ghost_high - buffer
+                        # upper_target = state.ghost_high - buffer
                         lower_target = state.ghost_low + buffer
                         
-                        if tick_info.bid >= upper_target and not state.touched_opposite:
-                            logger.info(f"Trap: Touched opposite high at {upper_target:.5f}")
-                            state.touched_opposite = True
+                        # if tick_info.bid >= upper_target and not state.touched_opposite:
+                        #     logger.info(f"Trap: Touched opposite high at {upper_target:.5f}")
+                        #     state.touched_opposite = True
                         
                         if (state.touched_opposite and 
                             tick_info.bid <= lower_target and 
