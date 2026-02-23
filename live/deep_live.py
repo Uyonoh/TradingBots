@@ -365,12 +365,17 @@ class MT5ConnectionManager:
 # -------------------------------------------------------------------
 class TradingLogger:
     """Centralized logging configuration for trading system."""
+    def __init__(self):
+        self.symbol = None
+        self.log_level = "INFO"
     
-    @staticmethod
-    def setup_logging(symbol: str, log_level: str = "INFO") -> logging.Logger:
+    def setup_logging(self, symbol: str, log_level: str = "INFO") -> logging.Logger:
         """
         Configure structured logging with console and file handlers.
         """
+        self.symbol = symbol
+        self.log_level = log_level
+
         log_dir = "logs"
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
@@ -413,6 +418,9 @@ class TradingLogger:
         logger.addHandler(error_handler)
         
         return logger
+    
+    def reset_logger(self):
+        return self.setup_logging(self.symbol, self.log_level)
 
 # -------------------------------------------------------------------
 # CONFIGURATION VALIDATION
@@ -1167,7 +1175,8 @@ def main():
     symbol = args.symbol.strip().upper()
     
     # Initialize logger
-    logger = TradingLogger.setup_logging(symbol, args.log_level)
+    trading_logger = TradingLogger()
+    logger = trading_logger.setup_logging(symbol, args.log_level)
     logger.info(f"Starting optimized trading bot for {symbol}")
     
     # Validate configuration
@@ -1269,6 +1278,7 @@ def main():
             # New Day Logic
             if state.current_date != today_date:
                 state.reset(today_date)
+                logger = trading_logger.reset_logger()
                 bias = safe_mt5_call(calculate_daily_bias, symbol)
                 if bias is not None:
                     state.bias = bias
