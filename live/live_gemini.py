@@ -107,6 +107,9 @@ class VelocityMonitor:
     """
     def __init__(self, symbol, lookback_seconds=60):
         self.symbol = symbol
+        self.tick_history = deque(maxlen=50)
+        self.min_pip_threshold = 5 # Min pip movement within tick hist in biased direcion
+
         self.tick_timestamps = deque()
         self.density_history = deque(maxlen=lookback_seconds)
         self.last_update = t_mod.time()
@@ -130,10 +133,12 @@ class VelocityMonitor:
 
     def get_ticks(self, server_time=None):
         server_time = datetime.fromtimestamp(server_time, tz=timezone.utc)
-        ticks = mt5.copy_ticks_from(self.symbol, server_time, 10000, mt5.COPY_TICKS_ALL)
+        ticks = np.asarray([t for t in mt5.copy_ticks_from(self.symbol, server_time, 5000, mt5.COPY_TICKS_ALL) if t['time_msc']/1000 > server_time.timestamp()])
         if ticks is None:
             return np.array([])
-        return ticks[1:]
+        
+        self.tick_history.extend(ticks)
+        return ticks
     
     def get_tick_timestamps(self, server_time=None):
         ticks = self.get_ticks(server_time)
@@ -174,6 +179,18 @@ class VelocityMonitor:
         
         if avg_density == 0: return False
         return current_density > (avg_density * multiplier)
+    
+    def velocity_bias(self, contract_size=1):
+        """ Gets the biasof price based on n ticks in history """
+
+        history = [(t["ask"] + t["bid"]) / 2 for t in self.tick_history]
+        hist_sum = (history - history[0]).sum()
+        if (hist_sum * contract_size) > self.min_pip_threshold:
+            return "buy"
+        elif (hist_sum * contract_size) < (self.min_pip_threshold * -1):
+            return "sell"
+        else:
+            return "straddle"
 
 class StrategyState:
     """Keeps track of daily state to survive loop cycles."""
@@ -419,7 +436,7 @@ def execute_trade(symbol, contract_size, direction, sl_pips):
         "sl": (tick.ask - sl_points) if direction == 'buy' else (tick.bid + sl_points),
         "deviation": DEVIATION,
         "magic": MAGIC_NUM,
-        "comment": f"LiveDemo_Bot[{sys.platform}]",
+        "comment": f"Live [{sys.platform}]",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling,
     }
@@ -688,7 +705,7 @@ def main():
                             # Above Daily Open
                             if tick.ask > state.daily_open_price:
                                 # High Velocity
-                                if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']):
+                                if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']) and velocity.velocity_bias() == state.bias:
                                     print(f"Price >= {upper_target} and  > {state.daily_open_price}")
                                     current_density = len(velocity.tick_timestamps) / 30.0
                                     avg_density = sum(velocity.density_history) / len(velocity.density_history)
@@ -716,7 +733,7 @@ def main():
                         lower_target = state.ghost_low + buffer
                         if tick.bid <= lower_target:
                             if tick.bid < state.daily_open_price:
-                                if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']):
+                                if velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']) and velocity.velocity_bias() == state.bias:
                                     print(f"Price <= {lower_target} and < {state.daily_open_price}")
                                     print(now_cet)
                                     print(f"Entering Sell")

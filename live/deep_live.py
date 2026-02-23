@@ -637,7 +637,7 @@ class OptimizedVelocityMonitor:
         
         # Use a larger batch size but limit frequency
         server_time = datetime.fromtimestamp(server_time, tz=timezone.utc)
-        ticks = np.asarray([t for t in mt5.copy_ticks_from(self.symbol, server_time, 5000, mt5.COPY_TICKS_ALL) if t['time_msc'] > server_time.timestamp()])
+        ticks = np.asarray([t for t in mt5.copy_ticks_from(self.symbol, server_time, 5000, mt5.COPY_TICKS_ALL) if t['time_msc']/1000 > server_time.timestamp()])
         if ticks is None or len(ticks) == 0:
             return np.array([])
         
@@ -718,7 +718,8 @@ class OptimizedVelocityMonitor:
     def velocity_bias(self, contract_size=1):
         """ Gets the biasof price based on n ticks in history """
 
-        hist_sum = np.asarray(self.tick_history - self.tick_history[0]).sum()
+        history = [(t["ask"] + t["bid"]) / 2 for t in self.tick_history]
+        hist_sum = (history - history[0]).sum()
         if (hist_sum * contract_size) > self.min_pip_threshold:
             return "buy"
         elif (hist_sum * contract_size) < (self.min_pip_threshold * -1):
@@ -1065,7 +1066,7 @@ def execute_trade_with_cache(
         "sl": sl_price,
         "deviation": DEVIATION,
         "magic": MAGIC_NUM,
-        "comment": "LiveDemo_Bot[DEEP]",
+        "comment": f"DEEP_{sys.platform} bot",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling,
     }
