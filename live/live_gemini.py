@@ -299,9 +299,9 @@ def calculate_daily_bias(symbol):
     return "straddle"
 
 def touched_opposite(symbol, bias, target):
-    today = get_server_time_cet(symbol)
-    start_dt = datetime.combine(today.date(), CONFIG['session']['day_open'], today.tzinfo)
-    end_dt = today
+    today = datetime.now()
+    start_dt = UTC.localize(datetime.combine(today.date(), CONFIG['session']['day_open']))
+    end_dt = UTC.localize(today)
 
     zones = {
         UTC2: 2,
@@ -312,11 +312,12 @@ def touched_opposite(symbol, bias, target):
     offset = 1 if islinux else 0
     start_dt = start_dt + timedelta(hours=zones[server_zone] - offset)
     end_dt   = end_dt   + timedelta(hours=zones[server_zone] - offset)
-    print(start_dt)
-    print(end_dt)
+    
     rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, end_dt)
     if rates is None or len(rates) == 0:
         print(f"Error fetching M1 data for opposite confirmation: {mt5.last_error()}")
+        if get_server_time(symbol) < start_dt:
+            print(f"    Server behind start time: {get_server_time(symbol).time()} < {start_dt.time()}")
         return False
 
     for r in rates:
