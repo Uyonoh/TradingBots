@@ -110,6 +110,9 @@ class DAXTickDataLoader:
                 df = self.fetch_ticks_chunk(current, month_end)
                 if df is not None:   
                     df.to_parquet(path, compression='zstd')
+                    print(f"    File saved to {path}")
+                else:
+                    print("Empty dataset")
             else:
                 print("    File already exists")
             current = (month_end + timedelta(seconds=1)).replace(day=1)
@@ -129,8 +132,8 @@ if __name__ == "__main__":
     # downloader = TickDownloader("GER40")
     # downloader.download_ticks()
 
-    loader = DAXTickDataLoader(symbol='GER40', data_dir='./tick_data')
+    loader = DAXTickDataLoader(symbol='#BTCUSD', data_dir='./tick_data')
     loader.fetch_and_store_range(
-        start_date=datetime(2025,1,1, tzinfo=UTC),
+        start_date=datetime(2024,1,1, tzinfo=UTC),
         end_date=datetime(2026,2,28, tzinfo=UTC)
     )

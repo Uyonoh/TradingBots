@@ -296,7 +296,10 @@ class TradingBot:
         day_open = rates[0]["open"]
         rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_H1, 1, 1)
         day_open = rates[0]["close"] # H1 open = last close
-        breadth = 65 #140
+        # Use current price and offset
+        tick =  mt5.symbol_info_tick(self.symbol)
+        day_open = round((tick.ask + tick.bid) / 2, 5)
+        breadth = 25 #140
 
         positions = {
             "top": {
@@ -323,7 +326,7 @@ class TradingBot:
         sl_pips = inputs["sl pips"]
         tp_pips = inputs["tp pips"]
         orders = inputs["num_orders"]
-        lot_size = 0.01
+        lot_size = inputs["lot_size"]
         symbol_ticks = self.get_symbol_ticks()
         spread = symbol_ticks.ask - symbol_ticks.bid
         spacing_pips = tp_pips / orders

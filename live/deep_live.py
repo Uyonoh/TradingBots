@@ -523,7 +523,7 @@ CONFIG = {
         'sell_threshold': 0.4
     }, 
     'entry_conditions': {
-        'buffer_pips': 10, 
+        'buffer_pips': 20, 
         'velocity_multiplier': 2, 
         'lookback_seconds': 60*60
     }, 
@@ -825,6 +825,30 @@ class OptimizedStrategyState:
             self._last_buffer_calc = t_mod.time()
         
         return self._buffer_cache[contract_size]
+    
+    def touched_opposite(self):
+        tick_info = safe_mt5_call(mt5.symbol_info_tick, self.symbol)
+        if self.bias == 'buy':
+            lower_target = self.ghost_low + buffer
+            upper_target = self.ghost_high - buffer
+            
+            if tick_info.ask <= lower_target and not self.touched_opposite:
+                logger.info(f"Trap: Touched opposite low at {lower_target:.5f}")
+                self.touched_opposite = True
+                if success:
+                    self.in_trade = True
+                    self.entry_price = price
+                    self.direction = 'buy'
+                    self.touched_opposite = False
+        
+        # SELL LOGIC
+        elif self.bias == 'sell':
+            upper_target = self.ghost_high - buffer
+            lower_target = self.ghost_low + buffer
+            
+            if tick_info.bid >= upper_target and not self.touched_opposite:
+                logger.info(f"Trap: Touched opposite high at {upper_target:.5f}")
+                self.touched_opposite = True
 
     def update_trade_status(self, has_position: bool) -> None:
         """Update trade status efficiently."""

@@ -42,7 +42,7 @@ CONFIG = {
     'entry_conditions': {
         'velocity_multiplier': 1.8,
         'lookback_seconds': 60 * 60,  # In seconds (approx matching rolling window)
-        'buffer_pips': 10.0     # Points buffer for ghost range
+        'buffer_pips': 20.0     # Points buffer for ghost range
     },
     'risk_management': {
         'initial_sl_pips': 50.0,     # Points

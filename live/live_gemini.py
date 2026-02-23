@@ -66,7 +66,7 @@ CONFIG = {
 }
 CONFIG = {
     'bias_filter': {'buy_threshold': 0.6, 'sell_threshold': 0.4}, 
-    'entry_conditions': {'buffer_pips': 10, 'velocity_multiplier': 2, 'lookback_seconds': 60*60}, 
+    'entry_conditions': {'buffer_pips': 20, 'velocity_multiplier': 2, 'lookback_seconds': 60*60}, 
     'risk_management': {
         'initial_sl_pips': 50, 
         'trailing_stages': [
@@ -414,7 +414,7 @@ def execute_trade(symbol, contract_size, direction, sl_pips):
         "sl": (tick.ask - sl_points) if direction == 'buy' else (tick.bid + sl_points),
         "deviation": DEVIATION,
         "magic": MAGIC_NUM,
-        "comment": "LiveDemo_Bot",
+        "comment": f"LiveDemo_Bot[{sys.platform}]",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling,
     }
