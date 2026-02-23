@@ -602,6 +602,9 @@ class OptimizedVelocityMonitor:
     
     def __init__(self, symbol: str, lookback_seconds: int = 60):
         self.symbol = symbol
+        self.tick_history = deque(maxlen=50)
+        self.min_pip_threshold = 5 # Min pip movement within tick hist in biased direcion
+
         self.tick_timestamps = deque(maxlen=3000)  # Limit memory usage (100 ticks/second * 30 seconds)
         self.density_history = deque(maxlen=lookback_seconds)
         self.density_sum = 0.0  # Running sum for quick average calculation
@@ -638,6 +641,9 @@ class OptimizedVelocityMonitor:
         if ticks is None or len(ticks) == 0:
             return np.array([])
         
+        # Store history
+        self.tick_history.extend(ticks)
+
         # Extract timestamps efficiently using numpy
         timestamps = ticks['time_msc'] / 1000.0
         return timestamps[1:] if len(timestamps) > 1 else timestamps
@@ -708,6 +714,17 @@ class OptimizedVelocityMonitor:
                 f"High velocity: {current_density:.2f} > {avg_density:.2f} × {multiplier}"
             )
         return is_high
+    
+    def velocity_bias(self, contract_size=1):
+        """ Gets the biasof price based on n ticks in history """
+
+        hist_sum = np.asarray(self.tick_history - self.tick_history[0]).sum()
+        if (hist_sum * contract_size) > self.min_pip_threshold:
+            return "buy"
+        elif (hist_sum * contract_size) < (self.min_pip_threshold * -1):
+            return "sell"
+        else:
+            return "straddle"
     
     def get_current_metrics(self) -> Dict[str, float]:
         """Get current velocity metrics for monitoring."""
@@ -829,7 +846,7 @@ class OptimizedStrategyState:
         
         return self._buffer_cache[contract_size]
     
-    def touched_opposite(self, buffer):
+    def check_touched_opposite(self, buffer):
         tick_info = safe_mt5_call(mt5.symbol_info_tick, self.symbol)
         if self.bias == 'buy':
             lower_target = self.ghost_low + buffer
@@ -1265,8 +1282,8 @@ def main():
                 velocity.update_history()
                 last_velocity_update = current_time
                 
-                # Log metrics every 5 minutes
-                if current_time - last_metrics_log >= 300:
+                # Log metrics every 1 minutes
+                if current_time - last_metrics_log >= 60:
                     metrics = velocity.get_current_metrics()
                     logger.info(f"Velocity metrics: {metrics}")
                     last_metrics_log = current_time
@@ -1352,7 +1369,7 @@ def main():
             elif state.bias != "straddle" and state.ghost_high is not None and state.daily_open_price is not None:
                 if session_time_manager.is_in_trading_hours(server_time):
                     buffer = state.calculate_buffer(contract_size)
-                    state.touched_opposite(buffer)
+                    state.check_touched_opposite(buffer)
                     # BUY LOGIC
                     if state.bias == 'buy':
                         # lower_target = state.ghost_low + buffer
@@ -1365,7 +1382,9 @@ def main():
                         if (state.touched_opposite and 
                             tick_info.ask >= upper_target and 
                             tick_info.ask > state.daily_open_price and
-                            velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier'])):
+                            velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']) and
+                            velocity.velocity_bias(contract_size) == state.bias
+                            ):
                             
                             logger.info(f"Buy entry: Price={tick_info.ask:.5f} >= {upper_target:.5f}")
                             success, price = safe_mt5_call(
@@ -1390,7 +1409,9 @@ def main():
                         if (state.touched_opposite and 
                             tick_info.bid <= lower_target and 
                             tick_info.bid < state.daily_open_price and
-                            velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier'])):
+                            velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier']) and
+                            velocity.velocity_bias(contract_size) == state.bias
+                            ):
                             
                             logger.info(f"Sell entry: Price={tick_info.bid:.5f} <= {lower_target:.5f}")
                             success, price = safe_mt5_call(

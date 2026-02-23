@@ -299,7 +299,7 @@ class TradingBot:
         # Use current price and offset
         tick =  mt5.symbol_info_tick(self.symbol)
         day_open = round((tick.ask + tick.bid) / 2, 5)
-        breadth = 25 #140
+        breadth = 10 #140
 
         positions = {
             "top": {

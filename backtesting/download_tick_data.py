@@ -132,8 +132,8 @@ if __name__ == "__main__":
     # downloader = TickDownloader("GER40")
     # downloader.download_ticks()
 
-    loader = DAXTickDataLoader(symbol='#BTCUSD', data_dir='./tick_data')
+    loader = DAXTickDataLoader(symbol='GER40', data_dir='./tick_data')
     loader.fetch_and_store_range(
-        start_date=datetime(2024,1,1, tzinfo=UTC),
+        start_date=datetime(2026,1,1, tzinfo=UTC),
         end_date=datetime(2026,2,28, tzinfo=UTC)
     )
