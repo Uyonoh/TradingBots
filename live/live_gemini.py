@@ -195,7 +195,7 @@ class StrategyState:
         self.ghost_high = None
         self.ghost_low = None
         self.daily_open_price = None
-        self.touched_opposite = False
+        # self.touched_opposite = False
         self.in_trade = False
         self.max_pnl = 0.0
     
