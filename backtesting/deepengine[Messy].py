@@ -443,7 +443,7 @@ def process_chunk_parallel(year, month, config):
                 
                 if touched_opposite and curr_ask >= g_high - (buffer / contract_size) and velocity_signals[i] and curr_ask > daily_opens[curr_date] and mom:
                     in_trade, direction, entry_p, entry_t, max_pnl = True, 'buy', curr_bid, curr_time, 0.0
-                    print(n_ticks)
+                    # print(n_ticks)
                     print("Entered buy")
                     # print(df.iloc[[i]])
             elif bias_str == 'sell':
@@ -453,7 +453,7 @@ def process_chunk_parallel(year, month, config):
                 
                 if touched_opposite and curr_bid <= g_low + (buffer / contract_size) and velocity_signals[i] and curr_bid < daily_opens[curr_date] and mom:
                     in_trade, direction, entry_p, entry_t, max_pnl = True, 'sell', curr_ask, curr_time, 0.0
-                    print(n_ticks)
+                    # print(n_ticks)
                     print(f"Entered sell: {entry_p, entry_t}")
                     # print(df.iloc[[i]])
 
@@ -780,7 +780,7 @@ if __name__ == "__main__":
     else:
         engine = DAXTickEngine(PRO_SETUP)
         # Example: Run for 2025
-        results = engine.run_backtest(2025, 2, 2026, 2)
+        results = engine.run_backtest(2026, 2, 2026, 2)
         
         if not results.empty:
             results = calculate_equity(results)

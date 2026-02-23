@@ -150,7 +150,7 @@ class VelocityMonitor:
     def on_tick(self):
         now = self.get_server_timestamp()
         if len(self.tick_timestamps) == 0:
-            timestamps = self.get_tick_timestamps(now)
+            timestamps = self.get_tick_timestamps(now - 0.001)
         else:
             last_timestamp = self.tick_timestamps[-1]
             timestamps = self.get_tick_timestamps(last_timestamp)
@@ -574,7 +574,7 @@ def main():
             velocity.update_history()
             last_update_seconds = t_mod.time()
 
-            if (now_cet.minute % 5 == 0) and (now_cet.minute != logged_m):
+            if (now_cet.minute % 1 == 0) and (now_cet.minute != logged_m):
                 logged_m = now_cet.minute
                 print(f"Tick velosity density at {now_cet.time()}: {velocity.density_history[-1]} || AVG: {avg_vel}")
 
