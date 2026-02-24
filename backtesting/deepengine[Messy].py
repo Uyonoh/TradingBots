@@ -179,9 +179,25 @@ class SignalPrecomputer:
         counts = df.resample('1S').size()
         density = counts.rolling('30S', min_periods=1).sum() / 30
         rolling_avg = density.rolling(lookback, min_periods=1).mean()
-        signal = density > (rolling_avg * multiplier)
+        sig1 = density > (rolling_avg * multiplier)
+        sig2 = density > 0.8
+        sig3 = (density / rolling_avg <= 2.06) & (density / rolling_avg >= 2.11)
+        signal = sig1 #& sig2 & sig3
         # Reindex back to tick level
         return signal.reindex(df.index, method='ffill').fillna(False).values
+    
+    @staticmethod
+    def compute_densities(df, multiplier, lookback):
+        # Resample to 1S, calculate rolling density
+        counts = df.resample('1S').size()
+        density = counts.rolling('30S', min_periods=1).sum() / 30
+        rolling_avg = density.rolling(lookback, min_periods=1).mean()
+        signal = density > (rolling_avg * multiplier)
+        # Reindex back to tick level
+        density =  density.reindex(df.index, method='ffill').fillna(False).values
+        rolling_avg = rolling_avg.reindex(df.index, method='ffill').fillna(False).values
+
+        return density, rolling_avg
 
     @staticmethod
     def get_daily_bias(df, buy_t, sell_t):
@@ -308,6 +324,9 @@ def process_chunk_parallel(year, month, config):
     velocity_signals = SignalPrecomputer.compute_velocity(
         df, config['entry_conditions']['velocity_multiplier'], config['entry_conditions']['lookback_seconds']
     )
+    densities = SignalPrecomputer.compute_densities(
+        df, config['entry_conditions']['velocity_multiplier'], config['entry_conditions']['lookback_seconds']
+    )
 
     # 2. Prepare NumPy arrays for the loop
     # This is where the magic happens for performance
@@ -380,7 +399,7 @@ def process_chunk_parallel(year, month, config):
                 pnl = (curr_bid - entry_p) if direction == 'buy' else (entry_p - curr_ask)
                 pnl *= contract_size # convert change in price to pips
                 trade = {'date': curr_date, 'entry_time': entry_t, 'entry_price': entry_p, 'exit_time': curr_time, ' exit_price': curr_bid if direction == 'buy' else curr_ask,
-                'direction': direction, 'profit_ticks': pnl, 'reason': 'Mandatory close'}
+                'direction': direction, 'profit_ticks': pnl, 'reason': 'Mandatory close', 'current density': curr_den, 'avg density': avg_den}
                 trades.append(trade)
                 
                 print(trade)
@@ -412,7 +431,7 @@ def process_chunk_parallel(year, month, config):
             # Check Stop Hit
             if (direction == 'buy' and curr_bid <= stop_level) or (direction == 'sell' and curr_ask >= stop_level):
                 trade = {'date': curr_date, 'entry_time': entry_t, 'entry_price': entry_p, 'exit_time': curr_time, ' exit_price': curr_bid if direction == 'buy' else curr_ask,
-                'direction': direction, 'profit_ticks': pnl, 'reason': 'stop', 'retention': retention}
+                'direction': direction, 'profit_ticks': pnl, 'reason': 'stop', 'retention': retention, 'current density': curr_den, 'avg density': avg_den}
                 trades.append(trade)
                 
                 print(trade)
@@ -445,7 +464,9 @@ def process_chunk_parallel(year, month, config):
                     in_trade, direction, entry_p, entry_t, max_pnl = True, 'buy', curr_bid, curr_time, 0.0
                     # print(n_ticks)
                     print("Entered buy")
-                    # print(df.iloc[[i]])
+                    curr_den = densities[0][i]
+                    avg_den = densities[1][i]
+                    
             elif bias_str == 'sell':
                 mom = True
                 mom = n_ticks.sum() < -sum_threshold
@@ -455,7 +476,8 @@ def process_chunk_parallel(year, month, config):
                     in_trade, direction, entry_p, entry_t, max_pnl = True, 'sell', curr_ask, curr_time, 0.0
                     # print(n_ticks)
                     print(f"Entered sell: {entry_p, entry_t}")
-                    # print(df.iloc[[i]])
+                    curr_den = densities[0][i]
+                    avg_den = densities[1][i]
 
     return trades
     
