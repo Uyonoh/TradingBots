@@ -338,15 +338,16 @@ def touched_opposite(symbol, bias, target):
         return False
 
     for r in rates:
-        high, low, close = r['high'], r['low'], r['close']
+        high, low, dt = r['high'], r['low'], r['time']
+        dt = datetime.fromtimestamp(dt) - timedelta(hours=zones[server_zone] - offset)
 
         if bias == "buy":
             if low <= target:
-                print("Touched Opposite (Buy setup)")
+                print(f"Touched Opposite (Buy setup). {target} at {dt.time()}")
                 return True
         else:
             if high >= target:
-                print("Touched Opposite (Sell setup)")
+                print(f"Touched Opposite (Sell setup). {target} at {dt.time()}")
                 return True
     return False
 

@@ -169,6 +169,8 @@ class DateTimeUtils:
     CET = pytz.timezone('Europe/Berlin')
     UTC = pytz.utc
     UTC1 = pytz.timezone('Africa/Lagos')
+    UTC2 = pytz.timezone('Europe/Athens')
+    UTC3 = pytz.timezone('Asia/Baghdad')
     LOCAL_TIME = pytz.timezone('Europe/London') if islinux else pytz.timezone('Africa/Lagos')
 
     @staticmethod
@@ -369,7 +371,7 @@ class TradingLogger:
         self.symbol = None
         self.log_level = "INFO"
     
-    def setup_logging(self, symbol: str, log_level: str = "INFO") -> logging.Logger:
+    def setup_logging(self, symbol: str, log_level: str = "INFO", name: str = "trading_bot") -> logging.Logger:
         """
         Configure structured logging with console and file handlers.
         """
@@ -380,7 +382,7 @@ class TradingLogger:
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
         
-        logger = logging.getLogger("trading_bot")
+        logger = logging.getLogger(name)
         logger.setLevel(getattr(logging, log_level.upper()))
         logger.handlers.clear()
         
@@ -619,7 +621,9 @@ class OptimizedVelocityMonitor:
         self.last_update = t_mod.time()
         self.last_tick_fetch = 0
         self.tick_fetch_interval = 0.5  # Fetch ticks every 0.5 seconds
-        self.logger = logging.getLogger("trading_bot.velocity")
+        self.logger = TradingLogger().setup_logging(self.symbol, "DEBUG", "trading_bot.velocity")
+        # logging.getLogger("trading_bot.velocity")
+        
         
         # Pre-allocate arrays for better performance
         self._tick_buffer = np.zeros(10000, dtype=np.float64)
@@ -716,9 +720,9 @@ class OptimizedVelocityMonitor:
             return False
         
         is_high = current_density > (avg_density * multiplier)
-        self.logger.debug(f"Querying velocity: {is_high}: {current_density} || {avg_density * multiplier} [{avg_density} X {multiplier}]")
+        self.logger.debug(f"High velocity: {is_high}. Current: {current_density} || {avg_density * multiplier} [{avg_density} X {multiplier}]")
         if is_high:
-            self.logger.debug(
+            self.logger.info(
                 f"High velocity: {current_density:.2f} > {avg_density:.2f} × {multiplier}"
             )
         return is_high
@@ -729,11 +733,15 @@ class OptimizedVelocityMonitor:
         history = [(t["ask"] + t["bid"]) / 2 for t in self.tick_history]
         hist_sum = (history - history[0]).sum()
         if (hist_sum * contract_size) > self.min_pip_threshold:
-            return "buy"
+            bias = "buy"
         elif (hist_sum * contract_size) < (self.min_pip_threshold * -1):
-            return "sell"
+            bias = "sell"
         else:
-            return "straddle"
+            bias = "straddle"
+
+        self.logger.info(f"Velosity bias is {bias.upper()}")
+
+        return bias
     
     def get_current_metrics(self) -> Dict[str, float]:
         """Get current velocity metrics for monitoring."""
@@ -806,6 +814,7 @@ class OptimizedStrategyState:
         self.ghost_low = None
         self.daily_open_price = None
         self.touched_opposite = False
+        self.checked_opposite = False
         
         # Trade Management
         self.in_trade = False
@@ -855,24 +864,63 @@ class OptimizedStrategyState:
         
         return self._buffer_cache[contract_size]
     
-    def check_touched_opposite(self, buffer):
+    def check_opposite_lookback(self, target, start_time):
+        today = datetime.now()
+        start_dt = datetime.combine(today.date(), start_time)
+        end_dt = today
+
+        zones = {
+            DateTimeUtils.UTC2: 2,
+            DateTimeUtils.UTC3: 3,
+        }
+        server_zone = TimeCache.get_timezone()
+        # Linux ser is in Londono (UTC) -1 from Local machine(UTC+1)
+        offset = 0 if islinux else 1
+
+        start_dt = to_mt5_time(start_dt)
+        end_dt = to_mt5_time(end_dt)
+        
+        rates = mt5.copy_rates_range(self.symbol, mt5.TIMEFRAME_M1, start_dt, end_dt)
+        if rates is None or len(rates) == 0:
+            self.logger.error(f"Error fetching M1 data for opposite confirmation: {mt5.last_error()}")
+            return False
+
+        for r in rates:
+            high, low, dts = r['high'], r['low'], r['time']
+            dt = datetime.fromtimestamp(dts) - timedelta(hours=zones[server_zone] - offset)
+
+            if self.bias == "buy":
+                if low <= target:
+                    self.logger.info(f"Touched Opposite (Buy setup). {target} at {dt.time()} {dts}")
+                    return True
+            else:
+                if high >= target:
+                    self.logger.info(f"Touched Opposite (Sell setup). {target} at {dt.time()} {dts}")
+                    return True
+        return False
+    
+    def check_touched_opposite(self, buffer, start_time):
         tick_info = safe_mt5_call(mt5.symbol_info_tick, self.symbol)
         if self.bias == 'buy':
-            lower_target = self.ghost_low + buffer
-            upper_target = self.ghost_high - buffer
+            target = self.ghost_low + buffer
             
-            if tick_info.ask <= lower_target and not self.touched_opposite:
-                logger.info(f"Trap: Touched opposite low at {lower_target:.5f}")
+            if tick_info.ask <= target and not self.touched_opposite:
+                logger.info(f"Trap: Touched opposite low at {target:.5f}")
                 self.touched_opposite = True
+                self.checked_opposite = True
         
         # SELL LOGIC
         elif self.bias == 'sell':
-            upper_target = self.ghost_high - buffer
-            lower_target = self.ghost_low + buffer
+            target = self.ghost_high - buffer
             
-            if tick_info.bid >= upper_target and not self.touched_opposite:
-                logger.info(f"Trap: Touched opposite high at {upper_target:.5f}")
+            if tick_info.bid >= target and not self.touched_opposite:
+                logger.info(f"Trap: Touched opposite high at {target:.5f}")
                 self.touched_opposite = True
+                self.checked_opposite = True
+        
+        if not self.checked_opposite:
+            self.touched_opposite = self.check_opposite_lookback(target, start_time)
+            self.checked_opposite = True
 
     def update_trade_status(self, has_position: bool) -> None:
         """Update trade status efficiently."""
@@ -1380,7 +1428,7 @@ def main():
             elif state.bias != "straddle" and state.ghost_high is not None and state.daily_open_price is not None:
                 if session_time_manager.is_in_trading_hours(server_time):
                     buffer = state.calculate_buffer(contract_size)
-                    state.check_touched_opposite(buffer)
+                    state.check_touched_opposite(buffer, session_times["session_start"].time())
                     # BUY LOGIC
                     if state.bias == 'buy':
                         # lower_target = state.ghost_low + buffer
