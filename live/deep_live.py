@@ -621,8 +621,8 @@ class OptimizedVelocityMonitor:
         self.last_update = t_mod.time()
         self.last_tick_fetch = 0
         self.tick_fetch_interval = 0.5  # Fetch ticks every 0.5 seconds
-        self.logger = TradingLogger().setup_logging(self.symbol, "DEBUG", "trading_bot.velocity")
-        # logging.getLogger("trading_bot.velocity")
+        # self.logger = TradingLogger().setup_logging(self.symbol, "DEBUG", "trading_bot.velocity")
+        self.logger = logging.getLogger("trading_bot.velocity")
         
         
         # Pre-allocate arrays for better performance
