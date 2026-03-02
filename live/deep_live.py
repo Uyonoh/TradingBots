@@ -405,7 +405,7 @@ class TradingLogger:
             backupCount=5
         )
         file_handler.setFormatter(formatter)
-        file_handler.setLevel(logging.INFO)
+        file_handler.setLevel(logging.DEBUG)
         logger.addHandler(file_handler)
         
         # Error file handler
@@ -708,8 +708,8 @@ class OptimizedVelocityMonitor:
         """Check for high velocity using cached average."""
         if len(self.density_history) < 10:
             return False
-        if t_mod.time() - self.last_update < 60 * 10:
-            return False
+        # if t_mod.time() - self.last_update < 60 * 10:
+        #     return False
         
         current_density = len(self.tick_timestamps) / 30.0
         
@@ -1009,7 +1009,7 @@ def get_frankfurt_open(symbol: str, today_date: date, session_times: Dict[str, d
     
     logger.debug(f"Fetching Frankfurt open at {start_dt}")
     
-    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, start_dt + timedelta(minutes=1))
+    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_dt, start_dt + timedelta(minutes=10))
     if rates is None or len(rates) == 0:
         raise MT5OperationError(f"No data returned for Frankfurt open: {symbol}")
     
@@ -1437,7 +1437,11 @@ def main():
                         # if tick_info.ask <= lower_target and not state.touched_opposite:
                         #     logger.info(f"Trap: Touched opposite low at {lower_target:.5f}")
                         #     state.touched_opposite = True
-                        
+                        logger.debug(f"  << touched opposite     = {state.touched_opposite} >>")
+                        logger.debug(f"  << price above ghost    = {tick_info.ask >= upper_target} >>")
+                        logger.debug(f"  << price above open     = {tick_info.ask > state.daily_open_price} >>")
+                        logger.debug(f"  << velocity > 2X        = {velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier'])} >>")
+                        logger.debug(f"  << velocity in bias dir = {velocity.velocity_bias(contract_size) == state.bias} >>")
                         if (state.touched_opposite and 
                             tick_info.ask >= upper_target and 
                             tick_info.ask > state.daily_open_price and
