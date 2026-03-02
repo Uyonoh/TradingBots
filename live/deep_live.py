@@ -659,6 +659,33 @@ class OptimizedVelocityMonitor:
         # Extract timestamps efficiently using numpy
         timestamps = ticks['time_msc'] / 1000.0
         return timestamps[1:] if len(timestamps) > 1 else timestamps
+    
+    def get_ticks_range(self, server_time=None):
+        if server_time is None:
+            server_time = self.get_server_timestamp()
+            if server_time is None:
+                return np.array([])
+        
+        # Use a larger batch size but limit frequency
+        server_time = datetime.fromtimestamp(server_time, tz=timezone.utc)
+        from_time = server_time - timedelta(seconds=self.density_history.maxlen//2)
+        ticks = np.asarray([t for t in mt5.copy_ticks_range(self.symbol, from_time, server_time, mt5.COPY_TICKS_ALL)])
+        if ticks is None or len(ticks) == 0:
+            return np.array([])
+        
+        # Store history
+        self.tick_history.extend(ticks)
+
+        # Update density
+        multiplier = self.density_history.maxlen // 2
+        current_density = len(ticks) / multiplier
+        density_arr = [current_density] * multiplier
+        self.density_history.extend(density_arr)
+        self.density_sum += current_density * multiplier
+
+        # Extract timestamps efficiently using numpy
+        timestamps = ticks['time_msc'] / 1000.0
+        return timestamps[1:] if len(timestamps) > 1 else timestamps
 
     def on_tick(self) -> None:
         """Process new ticks efficiently."""
@@ -669,7 +696,8 @@ class OptimizedVelocityMonitor:
         # Get new timestamps
         if len(self.tick_timestamps) == 0:
             # Subtract a small number so that the current timestamp is included
-            timestamps = self.get_tick_timestamps_batch(now - 0.001)
+            # timestamps = self.get_tick_timestamps_batch(now - 0.001)
+            timestamps = self.get_ticks_range()
         else:
             timestamps = self.get_tick_timestamps_batch(self.tick_timestamps[-1])
         
