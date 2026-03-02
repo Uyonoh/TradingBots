@@ -720,7 +720,7 @@ class OptimizedVelocityMonitor:
             return False
         
         is_high = current_density > (avg_density * multiplier)
-        self.logger.debug(f"High velocity: {is_high}. Current: {current_density} || {avg_density * multiplier} [{avg_density} X {multiplier}]")
+        # self.logger.debug(f"High velocity: {is_high}. Current: {current_density} || {avg_density * multiplier} [{avg_density} X {multiplier}]")
         if is_high:
             self.logger.info(
                 f"High velocity: {current_density:.2f} > {avg_density:.2f} × {multiplier}"
@@ -739,7 +739,7 @@ class OptimizedVelocityMonitor:
         else:
             bias = "straddle"
 
-        self.logger.info(f"Velosity bias is {bias.upper()}")
+        # self.logger.debug(f"Velosity bias is {bias.upper()}")
 
         return bias
     
@@ -1437,11 +1437,11 @@ def main():
                         # if tick_info.ask <= lower_target and not state.touched_opposite:
                         #     logger.info(f"Trap: Touched opposite low at {lower_target:.5f}")
                         #     state.touched_opposite = True
-                        logger.debug(f"  << touched opposite     = {state.touched_opposite} >>")
-                        logger.debug(f"  << price above ghost    = {tick_info.ask >= upper_target} >>")
-                        logger.debug(f"  << price above open     = {tick_info.ask > state.daily_open_price} >>")
-                        logger.debug(f"  << velocity > 2X        = {velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier'])} >>")
-                        logger.debug(f"  << velocity in bias dir = {velocity.velocity_bias(contract_size) == state.bias} >>")
+                        # logger.debug(f"  << touched opposite     = {state.touched_opposite} >>")
+                        # logger.debug(f"  << price above ghost    = {tick_info.ask >= upper_target} >>")
+                        # logger.debug(f"  << price above open     = {tick_info.ask > state.daily_open_price} >>")
+                        # logger.debug(f"  << velocity > 2X        = {velocity.is_high_velocity(CONFIG['entry_conditions']['velocity_multiplier'])} >>")
+                        # logger.debug(f"  << velocity in bias dir = {velocity.velocity_bias(contract_size) == state.bias} >>")
                         if (state.touched_opposite and 
                             tick_info.ask >= upper_target and 
                             tick_info.ask > state.daily_open_price and
