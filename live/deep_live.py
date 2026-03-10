@@ -679,9 +679,9 @@ class OptimizedVelocityMonitor:
         # Update density
         multiplier = self.density_history.maxlen // 2
         current_density = len(ticks) / multiplier
-        density_arr = [current_density] * multiplier
+        density_arr = [current_density] * self.density_history.maxlen
         self.density_history.extend(density_arr)
-        self.density_sum += current_density * multiplier
+        self.density_sum += current_density * self.density_history.maxlen
 
         # Extract timestamps efficiently using numpy
         timestamps = ticks['time_msc'] / 1000.0
