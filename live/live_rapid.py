@@ -660,7 +660,7 @@ def main(magic_num=0):
 
     while True:
         # 1. Hardware Efficiency: Sleep to reduce CPU usage
-        t_mod.sleep(0.1) 
+        # t_mod.sleep(0.1) 
         
         # 2. Update Time
         now = get_server_time(symbol)
