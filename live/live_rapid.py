@@ -77,7 +77,7 @@ CONFIG = {
         },
     'session': {
         'day_open': time(9, 0),
-        'start_hour': 5, 'start_minute': 0, # Entry Window Start
+        'start_hour': 0, 'start_minute': 0, # Entry Window Start
         'end_hour': 23, 'end_minute': 30,   # Mandatory Close
         'ghost_start': time(8, 0),
         'ghost_end': time(8, 30)
