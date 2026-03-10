@@ -3,12 +3,15 @@ import pandas as pd
 import numpy as np
 import pytz
 from datetime import datetime, timedelta, timezone, date, time
+from typing import Optional, Dict, Any, List, Tuple, Callable, Union
 import calendar
 import time as t_mod
 from collections import deque
 import os
 import sys
 import dotenv
+import logging
+from functools import wraps, lru_cache
 
 if sys.platform == "linux":
     from mt5linux import MetaTrader5
@@ -29,6 +32,8 @@ dotenv.load_dotenv()
 # -------------------------------------------------------------------
 # CONFIGURATION
 # -------------------------------------------------------------------
+logger = logging.getLogger()
+
 LOGIN = int(os.environ["ACCOUNT_ID"])
 PASSWORD = os.environ["PASSWORD"]
 SERVER = os.environ["SERVER"]
@@ -95,6 +100,73 @@ UTC = pytz.utc
 UTC2 = pytz.timezone('Europe/Athens') # EET / CAT
 UTC3 = pytz.timezone('Asia/Baghdad') # EAT / MST
 LOCAL_ZONE = datetime.now(UTC).astimezone().tzinfo.tzname
+
+# -------------------------------------------------------------------
+# CUSTOM EXCEPTIONS
+# -------------------------------------------------------------------
+class TradingError(Exception):
+    """Base exception for all trading-related errors."""
+    pass
+
+class MT5ConnectionError(TradingError):
+    """Raised when MT5 connection fails."""
+    pass
+
+class MT5OperationError(TradingError):
+    """Raised when MT5 operation fails."""
+    pass
+
+class ConfigurationError(TradingError):
+    """Raised when configuration is invalid."""
+    pass
+
+class OrderExecutionError(TradingError):
+    """Raised when order execution fails."""
+    pass
+
+class SymbolError(TradingError):
+    """Raised when symbol operations fail."""
+    pass
+
+class TimezoneError(TradingError):
+    """Raised when timezone operations fail."""
+    pass
+
+# -------------------------------------------------------------------
+# RETRY DECORATOR
+# -------------------------------------------------------------------
+def retry(
+    max_attempts: int = 3,
+    delay: float = 1.0,
+    backoff: float = 2.0,
+    exceptions: tuple = (Exception,),
+    logger: Optional[logging.Logger] = None
+):
+    """
+    Retry decorator with exponential backoff.
+    """
+    def decorator(func: Callable):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            current_delay = delay
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    if attempt == max_attempts:
+                        if logger:
+                            logger.error(f"Operation failed after {max_attempts} attempts: {e}")
+                        raise
+                    
+                    if logger:
+                        logger.warning(f"Attempt {attempt}/{max_attempts} failed: {e}. "
+                                      f"Retrying in {current_delay:.1f}s...")
+                    
+                    t_mod.sleep(current_delay)
+                    current_delay *= backoff
+            return None
+        return wrapper
+    return decorator
 
 # -------------------------------------------------------------------
 # HELPER CLASSES
@@ -230,6 +302,7 @@ class StrategyState:
 # -------------------------------------------------------------------
 # Error: incorrect implementation, should use UTC2/3 for server
 # Might not need server time? Trade CET
+@retry(max_attempts=10, delay=1.0, logger=logger)
 def get_server_timezone(year=None, month=None, day=None):
     """
     Returns the current server time based on:
@@ -266,6 +339,7 @@ def get_server_timezone(year=None, month=None, day=None):
     server_time = now_utc + timedelta(hours=offset_hours)
     return zone
 
+@retry(max_attempts=10, delay=1.0, logger=logger)
 def get_server_time(symbol):
         utc_now = datetime.now(UTC)
         # Error: remove hardcodded hours, should be dynamic
@@ -283,6 +357,7 @@ def get_server_time(symbol):
 
         return server_time
 
+@retry(max_attempts=10, delay=1.0, logger=logger)
 def get_server_time_cet(symbol):
     """Gets MT5 server time and converts to CET."""
     # Note: MT5 Usually returns time in Broker Time. 
@@ -291,6 +366,7 @@ def get_server_time_cet(symbol):
     server_time = get_server_time(symbol)
     return server_time.astimezone(CET)
 
+@retry(max_attempts=10, delay=1.0, logger=logger)
 def calculate_daily_bias(symbol):
     """
     Calculates bias based on YESTERDAY'S D1 Candle.
@@ -315,6 +391,7 @@ def calculate_daily_bias(symbol):
         return "sell"
     return "straddle"
 
+@retry(max_attempts=3, delay=1.0, logger=logger)
 def touched_opposite(symbol, bias, target):
     today = datetime.now()
     start_dt = UTC.localize(datetime.combine(today.date(), CONFIG['session']['day_open']))
@@ -351,6 +428,7 @@ def touched_opposite(symbol, bias, target):
                 return True
     return False
 
+@retry(max_attempts=3, delay=1.0, logger=logger)
 def get_ghost_range(symbol, today_date):
     """
     Fetches M1 bars from CET to determine range.
@@ -383,6 +461,7 @@ def get_ghost_range(symbol, today_date):
     
     return g_min, g_max
 
+@retry(max_attempts=3, delay=1.0, logger=logger)
 def get_frankfurt_open(symbol, today_date):
     """
     Fetches M1 bars open price.
@@ -421,6 +500,7 @@ def get_filling_type(symbol):
         # Default for Market Execution symbols
         return mt5.ORDER_FILLING_RETURN
 
+@retry(max_attempts=3, delay=1.0, exceptions=(OrderExecutionError,), logger=logger)
 def execute_trade(symbol, contract_size, direction, sl_pips):
     """Sends order to MT5"""
     tick = mt5.symbol_info_tick(symbol)
@@ -451,6 +531,7 @@ def execute_trade(symbol, contract_size, direction, sl_pips):
     print(f"Trade Executed: {direction} at {result.price}")
     return True, result.price
 
+@retry(max_attempts=3, delay=1.0, exceptions=(OrderExecutionError,), logger=logger)
 def close_position(symbol):
     """Closes all positions with our Magic Number"""
     positions = mt5.positions_get(symbol)
@@ -473,6 +554,8 @@ def close_position(symbol):
             mt5.order_send(request)
             print("Mandatory Close Executed")
 
+
+@retry(max_attempts=3, delay=1.0, exceptions=(OrderExecutionError,), logger=logger)
 def modify_sl(symbol, ticket, new_sl):
     request = {
         "action": mt5.TRADE_ACTION_SLTP,
