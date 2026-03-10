@@ -1,12 +1,24 @@
 import os
+import sys
 import time
 import argparse
-import MetaTrader5 as mt5
 # import pandas as pd
 from dotenv import load_dotenv
 import logging
 from orders import order, doublebanger, get_pending_orders, get_open_positions
 load_dotenv()
+
+if sys.platform == "linux":
+    from mt5linux import MetaTrader5
+    mt5 = MetaTrader5()
+    islinux = True
+    MAGIC_NUM = "10"
+elif sys.platform == "win32":
+    import MetaTrader5 as mt5
+    islinux = False
+    MAGIC_NUM = "20"
+else:
+    raise RuntimeError(f"Unknown platform {sys.platform}. Must be 'win32' or 'linux'")
 
 LOGIN = int(os.environ["ACCOUNT_ID"])
 PASSWORD = os.environ["PASSWORD"]
@@ -299,7 +311,7 @@ class TradingBot:
         # Use current price and offset
         tick =  mt5.symbol_info_tick(self.symbol)
         day_open = round((tick.ask + tick.bid) / 2, 5)
-        breadth = 10 #140
+        breadth = 10 + (tick.ask - tick.bid)/2
 
         positions = {
             "top": {
@@ -311,9 +323,13 @@ class TradingBot:
         }
         # sl_pips = args.slpips
         inputs = {
-                "lot_size":0.01, "sl pips": 100, "tp pips": 100,
+                "lot_size":0.01, "sl pips": 50, "tp pips": 100,
                 "spacing_pips": 10, "num_orders": 10
                 }
+        
+        print(f"Initiating daily banger with inputs: {inputs}")
+        print(f"MAGIC NUMBER: {self.magic_number}")
+
         for pos,v in positions.items():
             inputs["entry"] =  v["entry"]
             positions[pos]["positions"] = self.doublebanger(inputs=inputs, confirm=False, autocomplete=True)
@@ -335,7 +351,7 @@ class TradingBot:
         
         while not (top_filled or bottom_filled):
             self.logger.info("Waiting for orders to be filled..")
-            time.sleep(2)
+            time.sleep(0.1)
 
             active_orders = mt5.orders_get(symbol=self.symbol)
             if not active_orders:
@@ -345,8 +361,8 @@ class TradingBot:
             top_still_pending = positions["top"]["pending_order"] in active_tickets
             bottom_still_pending = positions["bottom"]["pending_order"] in active_tickets
 
-            self.logger.info(f"{top_still_pending=}")
-            self.logger.info(f"{bottom_still_pending=}")
+            self.logger.info(f"    {top_still_pending=}")
+            self.logger.info(f"    {bottom_still_pending=}")
             if not top_still_pending and not top_filled:
                 self.logger.info("Top order filled, making remaining sell orders...")
                 initial_entry = positions["top"]["entry"]
@@ -410,9 +426,9 @@ class TradingBot:
             }
             result = mt5.order_send(request)
             if result.retcode != mt5.TRADE_RETCODE_DONE:
-                print(f"Order {i+1} failed, ticket={ticket}, retcode={result.retcode}, error={mt5.last_error()}")
+                print(f"Order {i+1} on {level} failed, ticket={ticket}, retcode={result.retcode}, error={mt5.last_error()}")
             else:
-                print(f"Canceled order no {i+1}: {ticket}")
+                print(f"Canceled order no {i+1} on {level}: {ticket}")
 
     
     def __del__(self):

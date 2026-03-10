@@ -105,9 +105,9 @@ def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, s
         }
         
         # 3. Send the order
-        logging.info("\n" + "="*50)
-        logging.info(f"Sending Request: \n{request}")
-        logging.info("="*50)
+        # logging.info("\n" + "="*50)
+        # logging.info(f"Sending Request: \n{request}")
+        # logging.info("="*50)
         result = mt5.order_send(request)
         
         # 4. Check and print result
@@ -197,6 +197,22 @@ def doublebanger_orders(bot, inputs, direction, autocomplete=False):
     spacing_pips = tp_pips / orders
     dir_multiplier = 1 if direction == "buy" else -1
 
+    # Only need to track this, for following orders
+    opp_direction = "sell" if direction == "buy" else "buy"
+    opp_entry = initial_entry - inputs["spread"] * dir_multiplier
+    pending_order = order(
+        symbol=bot.symbol,
+        order_type=f"{opp_direction} limit",
+        start_price=opp_entry,
+        spacing_pips=0,
+        num_orders=1,
+        volume_per_order=lot_size,
+        stop_loss_pips=sl_pips,
+        take_profit_pips=tp_pips
+    )
+    positions.append(pending_order)
+    # positions.insert(0, pending_order)
+
     for i in range(orders):
         lots = lot_size
         if i in [2, 5, 9]:
@@ -216,20 +232,7 @@ def doublebanger_orders(bot, inputs, direction, autocomplete=False):
             take_profit_pips=tp
         )
         positions.append(pos)
-    # Only need to track this, for following orders
-    direction = "sell" if direction == "buy" else "buy"
-    initial_entry = initial_entry - inputs["spread"] * dir_multiplier
-    pending_order = order(
-        symbol=bot.symbol,
-        order_type=f"{direction} limit",
-        start_price=initial_entry,
-        spacing_pips=0,
-        num_orders=1,
-        volume_per_order=lot_size,
-        stop_loss_pips=sl_pips,
-        take_profit_pips=tp_pips
-    )
-    positions.insert(0, pending_order)
+    
     
     if not autocomplete:
         pending = True
@@ -275,17 +278,6 @@ def doublebanger(bot, inputs, confirm=True, autocomplete=False):
     inputs["spread"] = spread
     bot.logger.info("Current spread is %s", spread)
 
-    # initial_entry = inputs["entry"]
-    # sl_pips = inputs["sl pips"]
-    # tp_pips = inputs["tp pips"]
-    # orders = inputs["num_orders"]
-    # spacing_pips = tp_pips / orders
-
-    # for i in range(orders):
-    #     entry = initial_entry + (i * spacing_pips)
-    #     tp = initial_entry + tp_pips
-    #     sl = entry - sl_pips
-
     if inputs["entry"] > symbol_ticks.ask:
         bot.logger.info("Entry is above market price")
         if confirm:
@@ -293,48 +285,6 @@ def doublebanger(bot, inputs, confirm=True, autocomplete=False):
                 bot.logger.error("Aborting operation")
                 return
         positions =  doublebanger_orders(bot, inputs, "buy", autocomplete)
-        # order(
-        #     symbol=bot.symbol,
-        #     order_type="buy stop",
-        #     start_price=inputs["entry"],
-        #     spacing_pips=inputs["spacing_pips"],
-        #     num_orders=inputs["num_orders"],
-        #     volume_per_order=inputs["lot_size"] ,
-        #     stop_loss_pips=inputs["sl pips"],
-        #     take_profit_pips=inputs["tp pips"]
-        # )
-        # # Only need to track this, for following orders
-        # pending_order = order(
-        #     symbol=bot.symbol,
-        #     order_type="sell limit",
-        #     start_price=inputs["entry"],
-        #     spacing_pips=inputs["spacing_pips"],
-        #     num_orders=1,
-        #     volume_per_order=inputs["lot_size"] ,
-        #     stop_loss_pips=inputs["sl pips"],
-        #     take_profit_pips=inputs["tp pips"]
-        # )
-        
-        # if not autocomplete:
-        #     pending = True
-        #     inputs["entry"] -= 10 * bot.pip_value
-        #     while pending:
-        #         if input('Enter "SELL" to place remaining sell stops: ') == "SELL":
-        #             symbol_ticks = mt5.symbol_info_tick(bot.symbol)
-        #             if symbol_ticks.ask < inputs["entry"]:
-        #                 bot.logger.error("Market price still below %s", inputs["entry"])
-        #                 continue
-        #             order(
-        #                 symbol=bot.symbol,
-        #                 order_type="sell stop",
-        #                 start_price=inputs["entry"],
-        #                 spacing_pips=inputs["spacing_pips"],
-        #                 num_orders=inputs["num_orders"] - 1,
-        #                 volume_per_order=inputs["lot_size"] ,
-        #                 stop_loss_pips=inputs["sl pips"],
-        #                 take_profit_pips=inputs["tp pips"]
-        #             )
-        #             pending = False
     elif inputs["entry"] < symbol_ticks.bid:
         bot.logger.info("Entry is below market price")
         if confirm:
@@ -342,50 +292,6 @@ def doublebanger(bot, inputs, confirm=True, autocomplete=False):
                 bot.logger.error("Aborting operation")
                 return
         positions = doublebanger_orders(bot, inputs, "sell", autocomplete)
-        # order(
-        #     symbol=bot.symbol,
-        #     order_type="sell stop",
-        #     start_price=inputs["entry"],
-        #     spacing_pips=inputs["spacing_pips"],
-        #     num_orders=inputs["num_orders"],
-        #     volume_per_order=inputs["lot_size"] ,
-        #     stop_loss_pips=inputs["sl pips"],
-        #     take_profit_pips=inputs["tp pips"]
-        # )
-        # pending_order = order(
-        #     symbol=bot.symbol,
-        #     order_type="buy limit",
-        #     start_price=inputs["entry"],
-        #     spacing_pips=inputs["spacing_pips"],
-        #     num_orders=1,
-        #     volume_per_order=inputs["lot_size"] ,
-        #     stop_loss_pips=inputs["sl pips"],
-        #     take_profit_pips=inputs["tp pips"]
-        # )
-        
-        # if not autocomplete:
-        #     pending = True
-        #     inputs["entry"] += 10 * bot.pip_value
-        #     while pending:
-        #         if input('Enter "BUY" to place remaining buy stops: ') == "BUY":
-        #             symbol_ticks = mt5.symbol_info_tick(bot.symbol)
-        #             if symbol_ticks is None:
-        #                 print(f"Error for {bot.symbol}: {mt5.last_error()}")
-        #                 return None
-        #             if symbol_ticks.bid > inputs["entry"]:
-        #                 bot.logger.error("Market price still above %s", inputs["entry"])
-        #                 continue
-        #             order(
-        #                 symbol=bot.symbol,
-        #                 order_type="buy stop",
-        #                 start_price=inputs["entry"],
-        #                 spacing_pips=inputs["spacing_pips"],
-        #                 num_orders=inputs["num_orders"] - 1,
-        #                 volume_per_order=inputs["lot_size"] ,
-        #                 stop_loss_pips=inputs["sl pips"],
-        #                 take_profit_pips=inputs["tp pips"]
-        #             )
-        #             pending = False
 
     if autocomplete:
         return positions

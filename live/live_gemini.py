@@ -529,6 +529,13 @@ def main():
     
     last_update_seconds = t_mod.time()
     logged_m = 0
+    MAGIC_NUM = 123456
+    positions = mt5.positions_get(symbol=symbol)
+    my_pos = [p for p in positions]# if p.magic == MAGIC_NUM]
+    states = {}
+    for i in range(len(my_pos)):
+        states[f"state {i}"] = StrategyState()
+        states[f"state {i}"].in_trade = True
 
     while True:
         # 1. Hardware Efficiency: Sleep to reduce CPU usage
@@ -609,16 +616,17 @@ def main():
 
         # C. Check for existing positions (Recovery/Management)
         positions = mt5.positions_get(symbol=symbol)
-        my_pos = [p for p in positions if p.magic == MAGIC_NUM]
+        MAGIC_NUM = 123456
+        my_pos = [p for p in positions]# if p.magic == MAGIC_NUM]
         open_pos = len(my_pos) > 0
 
         # Reset trade metrics
         if state.in_trade and not open_pos:
             state.close_trade()
-        elif not state.in_trade and len(my_pos) > 1:
-            print("Unknown position open: ")
-            for p in my_pos:
-                print(p)
+        # elif not state.in_trade and len(my_pos) > 1:
+        #     print("Unknown position open: ")
+        #     for p in my_pos:
+        #         print(p)
 
         state.in_trade = open_pos
         
@@ -627,56 +635,57 @@ def main():
         # -----------------------------------------------------------
         if state.in_trade:
             pos = my_pos[0]
+            for i, pos in enumerate(my_pos):
             
-            # Mandatory Close (Time)
-            close_time = time(CONFIG['session']['end_hour'], CONFIG['session']['end_minute'])
-            if now_cet.time() >= close_time:
-                print(f"{now_cet.time()} -> {close_time}")
-                print("CLosing all Positions")
-                close_position(symbol)
-                state.in_trade = False
-                continue
+                # Mandatory Close (Time)
+                close_time = time(CONFIG['session']['end_hour'], CONFIG['session']['end_minute'])
+                if now_cet.time() >= close_time:
+                    print(f"{now_cet.time()} -> {close_time}")
+                    print("CLosing all Positions")
+                    close_position(symbol)
+                    states[f"state {i}"].in_trade = False
+                    continue
 
-            # Trailing Stop Logic
-            current_profit_points = (tick.bid - pos.price_open) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - tick.ask)
-            # Adjust for point value
-            current_profit_points *= contract_size # in pips
-            
-            if current_profit_points > state.max_pnl:
-                print(f"Max profit pips: {state.max_pnl} -> {current_profit_points}")
-            
-            state.max_pnl = max(state.max_pnl, current_profit_points)
-            
-            # Check Stages
-            best_retention = 0.0
-            triggered = False
-            
-            for s in CONFIG['risk_management']['trailing_stages']:
-                if state.max_pnl >= s['min_profit']:
-                    best_retention = s['retention']
-                    triggered = True
-            # best_retention = 0.5
-            if triggered:
-                # Calculate new SL
-                # print(f"{best_retention=}")
-                if best_retention == -1:
-                    # Leave sl at original
-                    pass
-                else:
-                    trail_dist = state.max_pnl * best_retention
-                    trail_dist /= contract_size
-                    new_sl = (pos.price_open + trail_dist) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - trail_dist)
-                    new_sl = round(new_sl, 2)
-                    # print(f"{trail_dist=}")
-                    # print(f"{new_sl=}")
-                    # Only modify if new SL is better (Higher for Buy, Lower for Sell)
-                    should_mod = False
-                    if pos.type == mt5.ORDER_TYPE_BUY and (pos.sl == 0 or new_sl > pos.sl): should_mod = True
-                    if pos.type == mt5.ORDER_TYPE_SELL and (pos.sl == 0 or new_sl < pos.sl): should_mod = True
-                    
-                    if should_mod:
-                        print(f"Modified SL: {pos.sl} => {new_sl}")
-                        modify_sl(symbol, pos.ticket, new_sl)
+                # Trailing Stop Logic
+                current_profit_points = (tick.bid - pos.price_open) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - tick.ask)
+                # Adjust for point value
+                current_profit_points *= contract_size # in pips
+                
+                if current_profit_points > states[f"state {i}"].max_pnl:
+                    print(f"Max profit pips: {states[f'state {i}'].max_pnl} -> {current_profit_points}")
+                
+                states[f"state {i}"].max_pnl = max(states[f"state {i}"].max_pnl, current_profit_points)
+                
+                # Check Stages
+                best_retention = 0.0
+                triggered = False
+                
+                for s in CONFIG['risk_management']['trailing_stages']:
+                    if states[f"state {i}"].max_pnl >= s['min_profit']:
+                        best_retention = s['retention']
+                        triggered = True
+                # best_retention = 0.5
+                if triggered:
+                    # Calculate new SL
+                    # print(f"{best_retention=}")
+                    if best_retention == -1:
+                        # Leave sl at original
+                        pass
+                    else:
+                        trail_dist = states[f"state {i}"].max_pnl * best_retention
+                        trail_dist /= contract_size
+                        new_sl = (pos.price_open + trail_dist) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - trail_dist)
+                        new_sl = round(new_sl, 2)
+                        # print(f"{trail_dist=}")
+                        # print(f"{new_sl=}")
+                        # Only modify if new SL is better (Higher for Buy, Lower for Sell)
+                        should_mod = False
+                        if pos.type == mt5.ORDER_TYPE_BUY and (pos.sl == 0 or new_sl > pos.sl): should_mod = True
+                        if pos.type == mt5.ORDER_TYPE_SELL and (pos.sl == 0 or new_sl < pos.sl): should_mod = True
+                        
+                        if should_mod:
+                            print(f"Modified SL: {pos.sl} => {new_sl}")
+                            modify_sl(symbol, pos.ticket, new_sl)
 
         # -----------------------------------------------------------
         # ENTRY LOGIC

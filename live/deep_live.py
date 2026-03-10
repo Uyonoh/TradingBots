@@ -779,6 +779,14 @@ class OptimizedVelocityMonitor:
             'history_size': len(self.density_history),
             'ticks_count': len(self.tick_timestamps)
         }
+    
+    def reset(self):
+        self.tick_history.clear()
+        self.tick_timestamps.clear()
+        self.density_history.clear()
+        self.density_sum = 0.0
+        self.last_update = t_mod.time()
+        self.last_tick_fetch = 0
 
 
 class SymbolInfoCache:
@@ -1354,6 +1362,7 @@ def main():
             # New Day Logic
             if state.current_date != today_date:
                 state.reset(today_date)
+                velocity.reset()
                 logger = trading_logger.reset_logger()
                 bias = safe_mt5_call(calculate_daily_bias, symbol)
                 if bias is not None:
