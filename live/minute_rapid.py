@@ -70,6 +70,7 @@ CONFIG = {
 # Timezones
 CET = pytz.timezone('Europe/Berlin')
 UTC = pytz.utc
+UTC1 = pytz.timezone('Africa/Lagos')
 UTC2 = pytz.timezone('Europe/Athens') # EET / CAT
 UTC3 = pytz.timezone('Asia/Baghdad') # EAT / MST
 LOCAL_ZONE = datetime.now(UTC).astimezone().tzinfo.tzname
@@ -773,7 +774,9 @@ def main(magic_num=0):
                         state.in_trade = True
                         state.entry_price = price
             else:
-                print("Outside trading hours")
+                t = datetime.now().astimezone(UTC1).time()
+                t = str(t).split(".")[0]
+                print(f"[ {t} ] Outside trading hours")
                 t_mod.sleep(60)
 
 if __name__ == "__main__":
