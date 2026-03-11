@@ -47,15 +47,7 @@ MAGIC_NUM += "02"
 MAGIC_NUM = int(MAGIC_NUM)
 
 # Strategy Parameters (Matching your backtest)
-r1 = 5
-r2 = 20
-r3 = 40
-r4 = 80
-r5 = 90
-r6 = 100
-r7 = 120
-r8 = 130
-r9 = 150
+r1 = 10
 
 CONFIG = {
     'bias_filter': {'buy_threshold': 0.6, 'sell_threshold': 0.4}, 
@@ -63,22 +55,14 @@ CONFIG = {
     'risk_management': {
         'initial_sl_pips': 5, 
         'trailing_stages': [
-            {'min_profit': 0, 'max_profit': r1, 'retention': -1}, 
-            {'min_profit': r1, 'max_profit': r2, 'retention': 0.55}, 
-            {'min_profit': r2, 'max_profit': r3, 'retention': 0.6}, 
-            {'min_profit': r3, 'max_profit': r4, 'retention': 0.65}, 
-            {'min_profit': r4, 'max_profit': r5, 'retention': 0.7}, 
-            {'min_profit': r5, 'max_profit': r6, 'retention': 0.75}, 
-            {'min_profit': r6, 'max_profit': r7, 'retention': 0.8}, 
-            {'min_profit': r7, 'max_profit': r8, 'retention': 0.85}, 
-            {'min_profit': r8, 'max_profit': r9, 'retention': 0.9}, 
-            {'min_profit': r9, 'retention': 0.95}
+            {'min_profit': 0, 'max_profit': r1, 'retention': -1},             
+            {'min_profit': r1, 'retention': 0.95}
             ], 
         },
     'session': {
         'day_open': time(9, 0),
-        'start_hour': 4, 'start_minute': 0, # Entry Window Start
-        'end_hour': 23, 'end_minute': 30,   # Mandatory Close
+        'start_hour': 8, 'start_minute': 0, # Entry Window Start
+        'end_hour': 21, 'end_minute': 00,   # Mandatory Close
         'ghost_start': time(3, 0),
         'ghost_end': time(4, 0)
         }, 
@@ -529,6 +513,23 @@ def get_frankfurt_open(symbol, today_date):
 
     return open_price
 
+def get_minute_bias(symbol):
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 1, 1)
+    
+    r = rates[0]
+    high, low, close = r['high'], r['low'], r['close']
+    
+    if high == low: return "straddle"
+    
+    rc = (close - low) / (high - low)
+    
+    if rc >= CONFIG['bias_filter']['buy_threshold']:
+        return "buy"
+    elif rc <= CONFIG['bias_filter']['sell_threshold']:
+        return "sell"
+    return "straddle"
+
+
 def get_filling_type(symbol):
     info = mt5.symbol_info(symbol)
     if info is None:
@@ -549,9 +550,11 @@ def get_filling_type(symbol):
 def execute_trade(symbol, contract_size, direction, sl_pips):
     """Sends order to MT5"""
     tick = mt5.symbol_info_tick(symbol)
+    spread = tick.ask - tick.bid
     filling = get_filling_type(symbol)
 
     sl_points = sl_pips / contract_size
+    sl_points += spread
     
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -562,7 +565,7 @@ def execute_trade(symbol, contract_size, direction, sl_pips):
         "sl": (tick.ask - sl_points) if direction == 'buy' else (tick.bid + sl_points),
         "deviation": DEVIATION,
         "magic": MAGIC_NUM,
-        "comment": f"Rapid [{sys.platform}]",
+        "comment": f"Minute [{sys.platform}]",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling,
     }
@@ -658,68 +661,35 @@ def main(magic_num=0):
     last_update_seconds = t_mod.time()
     logged_m = 0
 
-    while True:
-        # 1. Hardware Efficiency: Sleep to reduce CPU usage
-        # t_mod.sleep(0.1) 
-        
-        # 2. Update Time
-        now = get_server_time(symbol)
-        now_cet = get_server_time_cet(symbol)
-        today_date = now.date()
-        
-        # 3. New Day Logic
-        if state.current_date != today_date:
-            state.reset(today_date)
-            state.bias = calculate_daily_bias(symbol)
-            print(f"Daily Bias Calculated: {state.bias}")
 
-        # 4. Data Processing (Tick)
+    # C. Check for existing positions (Recovery/Management)
+    positions = mt5.positions_get(symbol=symbol)
+    my_pos = [p for p in positions if p.magic == MAGIC_NUM]
+    open_pos = len(my_pos) > 0
+    # Reset trade metrics
+    if state.in_trade and not open_pos:
+        state.close_trade()
+    # elif not state.in_trade and len(my_pos) > 1:
+    #     print("Unknown position open: ")
+    #     for p in my_pos:
+    #         print(p)
+    state.in_trade = open_pos
+
+    start_t = time(CONFIG['session']['start_hour'], CONFIG['session']['start_minute'])
+    end_t = time(CONFIG['session']['end_hour'], CONFIG['session']['end_minute'])
+
+    bias = "straddle"
+
+    while True:
+        now_cet = get_server_time_cet(symbol)
+
         tick = mt5.symbol_info_tick(symbol)
         if tick is None: continue
         
-        velocity.on_tick()
-        # print(f"30S tikcs: {len(velocity.tick_timestamps)}")
-        
-        # Update Velocity History every 1 second
-        if t_mod.time() - last_update_seconds >= 1.0:
-            avg_vel = sum(velocity.density_history)  / max(len(velocity.density_history), 1) #prevent division by zero
-            velocity.update_history()
-            last_update_seconds = t_mod.time()
-
-            if (now_cet.minute % 1 == 0) and (now_cet.minute != logged_m):
+        if (now_cet.minute % 1 == 0) and (now_cet.minute != logged_m):
                 logged_m = now_cet.minute
-                print(f"Tick velosity density at {now_cet.time()}: {velocity.density_history[-1]} || AVG: {avg_vel}")
-
-        # A. Capture Ghost Range (Runs once after 08:15)
-        if state.ghost_high is None:
-            if now_cet.time() > CONFIG['session']['ghost_end']:
-                g_min, g_max = get_ghost_range(symbol, today_date)
-                if g_min:
-                    state.ghost_low = g_min
-                    state.ghost_high = g_max
-
-                    target = g_min + buffer if state.bias == "buy" else g_max - buffer
-                    state.touched_opposite = touched_opposite(symbol, state.bias, target)
-                    print(f"Ghost Range Locked: {g_min} - {g_max}")
-                else:
-                    print("Waiting for Ghost Data...")
-                    # t_mod.sleep(5)
-                    continue
-
-        # C. Check for existing positions (Recovery/Management)
-        positions = mt5.positions_get(symbol=symbol)
-        my_pos = [p for p in positions if p.magic == MAGIC_NUM]
-        open_pos = len(my_pos) > 0
-
-        # Reset trade metrics
-        if state.in_trade and not open_pos:
-            state.close_trade()
-        # elif not state.in_trade and len(my_pos) > 1:
-        #     print("Unknown position open: ")
-        #     for p in my_pos:
-        #         print(p)
-
-        state.in_trade = open_pos
+                bias = get_minute_bias(symbol)
+                print(f"Bias for {now_cet.time()} = {bias}")
         
         # -----------------------------------------------------------
         # EXIT / RISK MANAGEMENT LOGIC
@@ -781,39 +751,30 @@ def main(magic_num=0):
         # ENTRY LOGIC
         # -----------------------------------------------------------
         else:
-            bias = state.bias
-            if state.bias == "straddle" and state.ghost_high is not None:
-                if tick.ask > state.ghost_high:
-                    bias = "buy"
-                elif tick.bid < state.ghost_low:
-                    bias = "sell"
-                else:
-                    continue
+            # bias = get_minute_bias(symbol)
             # Time Window Check
-            start_t = time(CONFIG['session']['start_hour'], CONFIG['session']['start_minute'])
-            end_t = time(CONFIG['session']['end_hour'], CONFIG['session']['end_minute'])
-            
             if start_t <= now_cet.time() < end_t:
-                if velocity.velocity_bias() != bias:
-                    continue
+                # if velocity.velocity_bias() != bias:
+                #     continue
 
                 # BUY LOGIC
                 if bias == 'buy':
-                    print(f"Entering Buy as {now_cet}")
                     success, price = execute_trade(symbol, contract_size, 'buy', CONFIG['risk_management']['initial_sl_pips'])
+                    print(f"Entered Buy at {now_cet} [{tick.ask}]")
                     if success:
                         state.in_trade = True
                         state.entry_price = price
-                        state.touched_opposite = False # Reset
 
                 # SELL LOGIC
                 elif bias == 'sell':
-                    print(f"Entering Sell as {now_cet}")
                     success, price = execute_trade(symbol, contract_size, 'sell', CONFIG['risk_management']['initial_sl_pips'])
+                    print(f"Entered Sell at {now_cet} [{tick.bid}]")
                     if success:
                         state.in_trade = True
                         state.entry_price = price
-                        state.touched_opposite = False
+            else:
+                print("Outside trading hours")
+                t_mod.sleep(60)
 
 if __name__ == "__main__":
     try:

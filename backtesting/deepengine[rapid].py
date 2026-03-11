@@ -113,14 +113,8 @@ r6 = 100
 r7 = 120
 r8 = 130
 r9 = 150
-
-PRO_SETUP = {
-    # GER40
-    'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25}, 
-    'entry_conditions': {'buffer_pips': np.int64(5), 'velocity_multiplier': 2.2, 'lookback_seconds': '60min'}, 
-    'risk_management': {
-        'initial_sl_pips': [np.int64(5), np.int64(50)], 
-        'trailing_stages': [
+"""
+'trailing_stages': [
             {'min_profit': 0, 'max_profit': r1, 'retention': -1}, 
             {'min_profit': r1, 'max_profit': r2, 'retention': 0.55}, 
             {'min_profit': r2, 'max_profit': r3, 'retention': 0.6}, 
@@ -132,12 +126,41 @@ PRO_SETUP = {
             {'min_profit': r8, 'max_profit': r9, 'retention': 0.9}, 
             {'min_profit': r9, 'retention': 0.95}
             ], 
+"""
+
+r1 = 30
+r2 = 40
+r3 = 50
+r4 = 80
+r5 = 90
+r6 = 100
+r7 = 120
+r8 = 130
+r9 = 150
+
+PRO_SETUP = {
+    # GER40
+    'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25}, 
+    'entry_conditions': {'buffer_pips': np.int64(5), 'velocity_multiplier': 2.2, 'lookback_seconds': '60min'}, 
+    'risk_management': {
+        'initial_sl_pips': [np.int64(r1), np.int64(50)], 
+        'trailing_stages': [
+            {'min_profit': 0, 'max_profit': np.int64(r1), 'retention': -1}, 
+            #{'min_profit': np.int64(30), 'max_profit': np.int64(60), 'retention': 0.55}, 
+            #{'min_profit': np.int64(60), 'max_profit': np.int64(90), 'retention': 0.6}, 
+            #{'min_profit': np.int64(90), 'max_profit': np.int64(120), 'retention': 0.65}, 
+            #{'min_profit': np.int64(120), 'max_profit': np.int64(150), 'retention': 0.7}, 
+            #{'min_profit': np.int64(150), 'retention': 0.95}
+            {'min_profit': np.int64(r1), 'retention': 1}
+            ], 
         'tp_override': {'fast_threshold': np.int64(15), 'slow_threshold': np.int64(120)}}, 
         'session_constraints': {
-            'day_open': '09:00', 'entry_start': '19:00', 'mandatory_close': '23:59',
-            'ghost_open': '08:00', 'ghost_close': '08:15',
+            'day_open': '09:00', 'entry_start': '04:00', 'mandatory_close': '22:00',
+            'ghost_open': '03:00', 'ghost_close': '04:00',
             }
         }
+print("Start 4:00")
+print("Use daily bias")
 
 CET = pytz.timezone('Europe/Berlin')
 UTC = pytz.utc
@@ -333,7 +356,7 @@ def process_chunk_parallel(year, month, config):
     
     # # 1. Precompute Signals (Vectorized)
     biases = SignalPrecomputer.get_daily_bias(df, config['bias_filter']['buy_threshold'], config['bias_filter']['sell_threshold'])
-    # ghost_ranges = SignalPrecomputer.get_ghost_ranges(df, config, biases)
+    ghost_ranges = SignalPrecomputer.get_ghost_ranges(df, config, biases)
     # velocity_signals = SignalPrecomputer.compute_velocity(
     #     df, config['entry_conditions']['velocity_multiplier'], config['entry_conditions']['lookback_seconds']
     # )
@@ -416,11 +439,23 @@ def process_chunk_parallel(year, month, config):
         is_spread_wide = (h == 8 and m < 5) or (h == 17 and m > 25)
         
         bias_str = biases.get(curr_date, 'straddle')
-        if bias_str == 'straddle': continue
         
-        # ghost = ghost_ranges.get(curr_date)
-        # if not ghost: continue
-        # g_low, g_high = ghost['min'], ghost['max']
+        ghost = ghost_ranges.get(curr_date)
+        if not ghost:
+            config['session_constraints']['ghost_open'] = "9:00"
+            config['session_constraints']['ghost_close'] = "9:30"
+            ghost_ranges = SignalPrecomputer.get_ghost_ranges(df, config, biases)
+            ghost = ghost_ranges.get(curr_date)
+            if not ghost: continue
+        g_low, g_high = ghost['min'], ghost['max']
+
+        if bias_str == 'straddle':
+            if curr_ask > g_high:
+                bias_str = "buy"
+            elif curr_bid < g_low:
+                bias_str = "sell"
+            else:
+                continue
 
         # EXIT LOGIC
         if in_trade:
@@ -432,7 +467,7 @@ def process_chunk_parallel(year, month, config):
                 'direction': direction, 'profit_ticks': pnl, 'max_pnl': max_pnl, 'reason': 'Mandatory close', 'current density': curr_den, 'avg density': avg_den}
                 trades.append(trade)
                 
-                print(trade)
+                # print(trade)
                 # print(df.iloc[[i]])
                 
                 in_trade = False
@@ -471,7 +506,8 @@ def process_chunk_parallel(year, month, config):
             
             # Trailing Stop Calculation
             pnl = (curr_bid - entry_p) if direction == 'buy' else (entry_p - curr_ask)
-            pnl += spread
+            #if pnl < 0:
+            #    pnl -= spread
             pnl *= contract_size
             max_pnl = max(max_pnl, pnl)
             
@@ -484,13 +520,24 @@ def process_chunk_parallel(year, month, config):
             
             if retention == -1:
                 stop_level = (entry_p - (sl_initial / contract_size)) if direction == 'buy' else (entry_p + (sl_initial / contract_size))
+            elif retention == 1:
+                #trail_dist = max_pnl * retention
+                #stop_level = (entry_p + (trail_dist / contract_size)) if direction == 'buy' else (entry_p - (trail_dist / contract_size))
+                
+                trade = {'date': curr_date, 'entry_time': entry_t, 'entry_price': entry_p, 'exit_time': shift_time, ' exit_price': shift_bid if direction == 'buy' else shift_ask,
+                'direction': direction, 'profit_ticks': pnl, 'max_pnl': max_pnl, 'reason': 'stop', 'retention': retention, 'current density': curr_den, 'avg density': avg_den}
+                trades.append(trade)
+                in_trade = False
+                touched_opposite = False
+                #print(trade)
+                continue
             else:
                 trail_dist = max_pnl * retention
                 stop_level = (entry_p + (trail_dist / contract_size)) if direction == 'buy' else (entry_p - (trail_dist / contract_size))
-            if direction == "buy":
-                stop_level -= spread
-            else:
-                stop_level += spread
+            #if direction == "buy":
+            #    stop_level -= spread
+            #else:
+            #    stop_level += spread
             
             # Check Stop Hit
             if (direction == 'buy' and curr_bid <= stop_level) or (direction == 'sell' and curr_ask >= stop_level):
@@ -498,7 +545,7 @@ def process_chunk_parallel(year, month, config):
                 'direction': direction, 'profit_ticks': pnl, 'max_pnl': max_pnl, 'reason': 'stop', 'retention': retention, 'current density': curr_den, 'avg density': avg_den}
                 trades.append(trade)
                 
-                print(trade)
+                #print(trade)
                 # print(df.iloc[[i]])
 
                 in_trade = False
@@ -514,52 +561,41 @@ def process_chunk_parallel(year, month, config):
                 
         # ENTRY LOGIC
         elif is_entry_window and not is_spread_wide:
-            n = 50
+            
+            n = 30
+            sum_threshold = 5
+            n_ticks = mids[i-n+1: i+1]
+            n_ticks = n_ticks - n_ticks[0]
+            m5 = n_ticks.sum() < -sum_threshold
+            m6 = n_ticks.sum() > sum_threshold
+            
+            n *= 10
             sum_threshold = 10
             n_ticks = mids[i-n+1: i+1]
             n_ticks = n_ticks - n_ticks[0]
             m1 = n_ticks.sum() > sum_threshold
-
-            n = 500
-            sum_threshold = 50
-            n_ticks = mids[i-n+1: i+1]
-            n_ticks = n_ticks - n_ticks[0]
-            m2 = n_ticks.sum() > sum_threshold
-
-            n = 50
-            sum_threshold = 10
-            n_ticks = mids[i-n+1: i+1]
-            n_ticks = n_ticks - n_ticks[0]
             m3 = n_ticks.sum() < -sum_threshold
 
             n = 500
             sum_threshold = 50
             n_ticks = mids[i-n+1: i+1]
             n_ticks = n_ticks - n_ticks[0]
+            m2 = n_ticks.sum() > sum_threshold
             m4 = n_ticks.sum() < -sum_threshold
 
-            n = 10
-            sum_threshold = 5
-            n_ticks = mids[i-n+1: i+1]
-            n_ticks = n_ticks - n_ticks[0]
-            m5 = n_ticks.sum() < -sum_threshold
+           
 
-            n = 10
-            sum_threshold = 5
-            n_ticks = mids[i-n+1: i+1]
-            n_ticks = n_ticks - n_ticks[0]
-            m6 = n_ticks.sum() > sum_threshold
+            #m1 = m3 = True
+            #m2 = m4 = True
 
-            # m1 = m3 = True
-
-            if m4 and m1 and m5 and bias_str == "sell":
+            if m4 and m1 and m6 and bias_str=="sell":# (curr_bid < g_low):
                 in_trade, direction, entry_p, entry_t, max_pnl, spread = True, 'sell', shift_ask, shift_time, 0.0, curr_spread
                 # print(n_ticks)
                 # print("Entered buy")
                 curr_den = 0 #densities[0][i]
                 avg_den =  0 #densities[1][i]
                     
-            elif m2 and m3 and m6 and bias_str == "buy":
+            elif m2 and m3 and m5 and bias_str=="buy":# (curr_ask > g_high):
                 in_trade, direction, entry_p, entry_t, max_pnl, spread = True, 'buy', shift_bid, shift_time, 0.0, curr_spread
                 # print(n_ticks)
                 # print(f"Entered sell: {entry_p, entry_t}")
@@ -890,7 +926,7 @@ if __name__ == "__main__":
     else:
         engine = DAXTickEngine(PRO_SETUP)
         # Example: Run for 2025
-        results = engine.run_backtest(2026, 3, 2026, 3)
+        results = engine.run_backtest(2026, 1, 2026, 3)
         
         if not results.empty:
             results = calculate_equity(results)
