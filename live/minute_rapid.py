@@ -47,7 +47,7 @@ MAGIC_NUM += "02"
 MAGIC_NUM = int(MAGIC_NUM)
 
 # Strategy Parameters (Matching your backtest)
-r1 = 10
+r1 = 5
 
 CONFIG = {
     'bias_filter': {'buy_threshold': 0.51, 'sell_threshold': 0.49}, 
@@ -307,6 +307,7 @@ class StrategyState:
         # Trade Management
         self.in_trade = False
         self.max_pnl = 0.0
+        self.current_profit_points = 0.0
         self.entry_price = 0.0
         self.direction = None # 'buy' or 'sell'
 
@@ -320,12 +321,14 @@ class StrategyState:
         # self.touched_opposite = False
         self.in_trade = False
         self.max_pnl = 0.0
+        self.current_profit_points = 0.00
     
     def close_trade(self):
         print(f"{self.bias} trade closed")
         self.touched_opposite = False
         self.in_trade = False
         self.max_pnl = 0.0
+        self.current_profit_points = 0.0
 
 # -------------------------------------------------------------------
 # CORE LOGIC
@@ -605,7 +608,7 @@ def close_position(symbol):
             print("Mandatory Close Executed")
 
 
-@retry(max_attempts=3, delay=1.0, exceptions=(OrderExecutionError,), logger=logger)
+#@retry(max_attempts=3, delay=1.0, exceptions=(OrderExecutionError,), logger=logger)
 def modify_sl(symbol, ticket, new_sl):
     request = {
         "action": mt5.TRADE_ACTION_SLTP,
@@ -618,6 +621,8 @@ def modify_sl(symbol, ticket, new_sl):
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         print(f"SL modification Failed: {result.comment}")
         print(f"{new_sl}")
+        return False
+    return True
     
         
 
@@ -673,6 +678,7 @@ def main(magic_num=0):
     bias = "straddle"
     now_cet = get_server_time_cet(symbol)
     entry_time = (now_cet - timedelta(minutes=5)).time()
+    sl_mod = True
 
     while True:
         now_cet = get_server_time_cet(symbol)
@@ -692,6 +698,9 @@ def main(magic_num=0):
         # Reset trade metrics
         if state.in_trade and not open_pos:
             bias = "straddle"
+            if state.current_profit_points < 0:
+                pass
+                #t_mod.sleep(30)
             state.close_trade()
         # elif not state.in_trade and len(my_pos) > 1:
         #     print("Unknown position open: ")
@@ -724,8 +733,8 @@ def main(magic_num=0):
                 
                 if (old_bias != bias) or (current_profit_points > 0):
                     close_position(symbol)
+                    print(f"[{now_cet.time()}]")
                     state.in_trade = False
-                    continue
                 else:
                     spread = tick.ask - tick.bid
                     sl_points = CONFIG['risk_management']['initial_sl_pips'] / contract_size
@@ -743,7 +752,12 @@ def main(magic_num=0):
             if current_profit_points > state.max_pnl:
                 print(f"Max profit pips: {state.max_pnl} -> {current_profit_points}")
             
+            
+            if not sl_mod: # sl_mod prev failed
+                state.max_pnl = 0.0
+                
             state.max_pnl = max(state.max_pnl, current_profit_points)
+            state.current_profit_points = current_profit_points
             
             # Check Stages
             best_retention = 0.0
@@ -775,7 +789,7 @@ def main(magic_num=0):
                     
                     if should_mod:
                         print(f"Modified SL: {pos.sl} => {new_sl}")
-                        modify_sl(symbol, pos.ticket, new_sl)
+                        sl_mod = modify_sl(symbol, pos.ticket, new_sl)
 
         # -----------------------------------------------------------
         # ENTRY LOGIC
