@@ -50,7 +50,7 @@ MAGIC_NUM = int(MAGIC_NUM)
 r1 = 10
 
 CONFIG = {
-    'bias_filter': {'buy_threshold': 0.6, 'sell_threshold': 0.4}, 
+    'bias_filter': {'buy_threshold': 0.51, 'sell_threshold': 0.49}, 
     'entry_conditions': {'buffer_pips': 20, 'velocity_multiplier': 2, 'lookback_seconds': 60*60}, 
     'risk_management': {
         'initial_sl_pips': 5, 
@@ -573,7 +573,7 @@ def execute_trade(symbol, contract_size, direction, sl_pips):
     
     result = mt5.order_send(request)
     if result.retcode != mt5.TRADE_RETCODE_DONE:
-        print(f"Order Failed: {result.comment}")
+        raise OrderExecutionError(f"Order Failed: {result.comment}")
         print(request)
         return False, 0.0
     
@@ -583,11 +583,12 @@ def execute_trade(symbol, contract_size, direction, sl_pips):
 @retry(max_attempts=3, delay=1.0, exceptions=(OrderExecutionError,), logger=logger)
 def close_position(symbol):
     """Closes all positions with our Magic Number"""
-    positions = mt5.positions_get(symbol)
+    positions = mt5.positions_get(symbol=symbol)
     if positions is None:
+        print(f"Nothing to close on {symbol}")
         return
     for pos in positions:
-        if pos.magic == MAGIC_NUM:
+        if 1:#pos.magic == MAGIC_NUM:
             tick = mt5.symbol_info_tick(symbol)
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
@@ -658,28 +659,20 @@ def main(magic_num=0):
     buffer /= contract_size
     
     print(f"Live Trading Started on {symbol}...")
+    tick = mt5.symbol_info_tick(symbol)
+    spread = tick.ask - tick.bid
+    print(f"Spread at open is {spread}")
     
     last_update_seconds = t_mod.time()
     logged_m = 0
 
 
-    # C. Check for existing positions (Recovery/Management)
-    positions = mt5.positions_get(symbol=symbol)
-    my_pos = [p for p in positions if p.magic == MAGIC_NUM]
-    open_pos = len(my_pos) > 0
-    # Reset trade metrics
-    if state.in_trade and not open_pos:
-        state.close_trade()
-    # elif not state.in_trade and len(my_pos) > 1:
-    #     print("Unknown position open: ")
-    #     for p in my_pos:
-    #         print(p)
-    state.in_trade = open_pos
-
     start_t = time(CONFIG['session']['start_hour'], CONFIG['session']['start_minute'])
     end_t = time(CONFIG['session']['end_hour'], CONFIG['session']['end_minute'])
 
     bias = "straddle"
+    now_cet = get_server_time_cet(symbol)
+    entry_time = (now_cet - timedelta(minutes=5)).time()
 
     while True:
         now_cet = get_server_time_cet(symbol)
@@ -687,10 +680,24 @@ def main(magic_num=0):
         tick = mt5.symbol_info_tick(symbol)
         if tick is None: continue
         
-        if (now_cet.minute % 1 == 0) and (now_cet.minute != logged_m):
+        if (now_cet.minute % 1 == 0) and (now_cet.minute != logged_m) and (now_cet.time().second <= 1):
                 logged_m = now_cet.minute
                 bias = get_minute_bias(symbol)
                 print(f"Bias for {now_cet.time()} = {bias}")
+        
+        # C. Check for existing positions (Recovery/Management)
+        positions = mt5.positions_get(symbol=symbol)
+        my_pos = [p for p in positions if p.magic == MAGIC_NUM]
+        open_pos = len(my_pos) > 0
+        # Reset trade metrics
+        if state.in_trade and not open_pos:
+            bias = "straddle"
+            state.close_trade()
+        # elif not state.in_trade and len(my_pos) > 1:
+        #     print("Unknown position open: ")
+        #     for p in my_pos:
+        #         print(p)
+        state.in_trade = open_pos
         
         # -----------------------------------------------------------
         # EXIT / RISK MANAGEMENT LOGIC
@@ -705,11 +712,33 @@ def main(magic_num=0):
                 close_position(symbol)
                 state.in_trade = False
                 continue
-
             # Trailing Stop Logic
             current_profit_points = (tick.bid - pos.price_open) if pos.type == mt5.ORDER_TYPE_BUY else (pos.price_open - tick.ask)
             # Adjust for point value
             current_profit_points *= contract_size # in pips
+            
+            if now_cet.time().second <= 1 and entry_time.minute != now_cet.time().minute:
+                old_bias = bias
+                bias = get_minute_bias(symbol)
+                bias = old_bias if bias == "straddle" else bias
+                
+                if (old_bias != bias) or (current_profit_points > 0):
+                    close_position(symbol)
+                    state.in_trade = False
+                    continue
+                else:
+                    spread = tick.ask - tick.bid
+                    sl_points = CONFIG['risk_management']['initial_sl_pips'] / contract_size
+                    sl_points += spread
+                    new_sl = (tick.ask - sl_points) if pos.type == mt5.ORDER_TYPE_BUY else (tick.bid + sl_points)
+                    
+                    should_mod = False
+                    if pos.type == mt5.ORDER_TYPE_BUY and (pos.sl == 0 or new_sl > pos.sl): should_mod = True
+                    if pos.type == mt5.ORDER_TYPE_SELL and (pos.sl == 0 or new_sl < pos.sl): should_mod = True
+                    
+                    if should_mod:
+                        print(f"Modified SL: {pos.sl} => {new_sl}")
+                        modify_sl(symbol, pos.ticket, new_sl)
             
             if current_profit_points > state.max_pnl:
                 print(f"Max profit pips: {state.max_pnl} -> {current_profit_points}")
@@ -765,6 +794,7 @@ def main(magic_num=0):
                     if success:
                         state.in_trade = True
                         state.entry_price = price
+                        entry_time = now_cet.time()
 
                 # SELL LOGIC
                 elif bias == 'sell':
@@ -773,6 +803,7 @@ def main(magic_num=0):
                     if success:
                         state.in_trade = True
                         state.entry_price = price
+                        entry_time = now_cet.time()
             else:
                 t = datetime.now().astimezone(UTC1).time()
                 t = str(t).split(".")[0]
