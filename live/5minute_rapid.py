@@ -56,17 +56,23 @@ MAGIC_NUM += "02"
 MAGIC_NUM = int(MAGIC_NUM)
 
 # Strategy Parameters (Matching your backtest)
-r1 = 3.8 * 2
+r1 = 20
 
 CONFIG = {
     'bias_filter': {'buy_threshold': 0.51, 'sell_threshold': 0.49, 'buy_limit': 0.85, 'sell_limit': 0.15, 'bias_threshold': 1.5}, 
     'entry_conditions': {'buffer_pips': 20, 'velocity_multiplier': 2, 'lookback_seconds': 60*60}, 
     'risk_management': {
-        'initial_sl_pips': 3.5, 
+        'initial_sl_pips': r1, 
         'trailing_stages': [
-            {'min_profit': 0, 'max_profit': r1, 'retention': -1},             
-            {'min_profit': r1, 'retention': 0.95}
-            ], 
+            {'min_profit': 0,   'max_profit': r1,  'retention': -1}, 
+            {'min_profit': r1,  'max_profit': 30,  'retention': 0.05}, 
+            {'min_profit': 30,  'max_profit': 50,  'retention': 0.5}, 
+            #{'min_profit': 60,  'max_profit': 90,  'retention': 0.7}, 
+            #{'min_profit': 90,  'max_profit': 120, 'retention': 0.8}, 
+            #{'min_profit': 120, 'max_profit': 150, 'retention': 0.9}, 
+            #{'min_profit': 150, 'retention': 0.95}
+            {'min_profit': 50, 'retention': 0.95}
+            ]
         },
     'session': {
         'day_open': time(9, 0),
@@ -527,38 +533,39 @@ def get_frankfurt_open(symbol, today_date):
     return open_price
 
 def get_minute_bias(symbol, reverse=False):
-    rev_bias = {
-        "buy": "sell",
-        "sell": "buy",
-        "straddle": "straddle",
-    }
     
-    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 1, 1)
+    biases = []
     
-    r = rates[0]
-    high, low, close = r['high'], r['low'], r['close']
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 1, 2)
     
-    if high == low: return "straddle"
-    
-    rc = (close - low) / (high - low)
-    print(f"RC: {rc}")
-    
-    if rc >= CONFIG['bias_filter']['buy_threshold']:
-        if rc >= CONFIG['bias_filter']['buy_limit'] + 1:
-            bias =  "sell"
-        else:
-            bias =  "buy"
-    elif rc <= CONFIG['bias_filter']['sell_threshold']:
-        if rc <= CONFIG['bias_filter']['sell_limit'] - 1:
-            bias =  "buy"
-        else:
-            bias =  "sell"
-    else:
-        bias =  "straddle"
+    for r in rates:
+        high, low, close = r['high'], r['low'], r['close']
         
+        if high == low: return "straddle"
         
-    if reverse:
-        bias = rev_bias[bias]
+        rc = (close - low) / (high - low)
+        
+        if rc >= CONFIG['bias_filter']['buy_threshold']:
+            biases.append("buy")
+        elif rc <= CONFIG['bias_filter']['sell_threshold']:
+            biases.append("sell")
+        else:
+            biases.append("straddle")
+        
+    bias = biases[0] if len(set(biases)) == 1 else "straddle"
+    print(f"BIASES: {biases}")
+
+    return bias
+
+def get_trend_bias(symbol, mins=15):
+    
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 1, mins)
+    
+    range = rates[-1]["close"] - rates[0]["open"]
+    if abs(range) < 15:
+        return "straddle"
+
+    bias = "buy" if range > 0 else "sell"
 
     return bias
 
@@ -580,7 +587,7 @@ def get_filling_type(symbol):
         return mt5.ORDER_FILLING_RETURN
 
 @retry(max_attempts=3, delay=1.0, exceptions=(OrderExecutionError,), logger=logger)
-def execute_trade(symbol, contract_size, direction, sl_pips, tp_pips=None):
+def execute_trade(symbol, contract_size, direction, trend, sl_pips, tp_pips=None):
     """Sends order to MT5"""
     tick = mt5.symbol_info_tick(symbol)
     spread = tick.ask - tick.bid
@@ -588,6 +595,8 @@ def execute_trade(symbol, contract_size, direction, sl_pips, tp_pips=None):
 
     sl_points = sl_pips / contract_size
     sl_points += spread
+    if trend != direction:
+        sl_points /= 2
     
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -598,7 +607,7 @@ def execute_trade(symbol, contract_size, direction, sl_pips, tp_pips=None):
         "sl": (tick.ask - sl_points) if direction == 'buy' else (tick.bid + sl_points),
         "deviation": DEVIATION,
         "magic": MAGIC_NUM,
-        "comment": f"Minute [{sys.platform}]",
+        "comment": f"5Min [{sys.platform}]",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling,
     }
@@ -726,6 +735,10 @@ def main(magic_num=0):
     entry_time = (now_cet - timedelta(minutes=5)).time()
     sl_mod = True
 
+    bias = get_minute_bias(symbol)
+    print(f"Bias for {now_cet.time()} = {bias}")    
+    bias = trend = "straddle"
+
     while True:
         now_cet = get_server_time_cet(symbol)
 
@@ -740,9 +753,12 @@ def main(magic_num=0):
                 #if spread > CONFIG['bias_filter']['bias_threshold']:
                 if time(10, 0) <= now_cet.time() <= time(1, 30):
                     reverse = True
-                    
+                trend = get_trend_bias(symbol)
                 bias = get_minute_bias(symbol, reverse)
-                print(f"Bias for {now_cet.time()} = {bias}")
+                print(f"Bias for {now_cet.time()} = {bias} :: Trend = {trend}")
+                if trend == "straddle":
+                    continue
+
         
         # C. Check for existing positions (Recovery/Management)
         positions = mt5.positions_get(symbol=symbol)
@@ -779,38 +795,38 @@ def main(magic_num=0):
             # Adjust for point value
             current_profit_points *= contract_size # in pips
             
-            if now_cet.time().second <= 1 and entry_time.minute != now_cet.time().minute:
-                old_bias = bias
-                bias = get_minute_bias(symbol)
-                bias = old_bias if bias == "straddle" else bias
+            # if now_cet.time().second <= 1 and entry_time.minute != now_cet.time().minute:
+            #     old_bias = bias
+            #     bias = get_minute_bias(symbol)
+            #     bias = old_bias if bias == "straddle" else bias
                 
-                if (old_bias != bias) or (current_profit_points > 0):
-                    close_position(symbol)
-                    print(f"[{now_cet.time()}]")
-                    state.in_trade = False
-                else:
-                    spread = tick.ask - tick.bid
-                    sl_points = CONFIG['risk_management']['initial_sl_pips'] / contract_size
-                    sl_points += spread
-                    new_sl = (tick.ask - sl_points) if pos.type == mt5.ORDER_TYPE_BUY else (tick.bid + sl_points)
+            #     if (old_bias != bias) or (current_profit_points > 0):
+            #         close_position(symbol)
+            #         print(f"[{now_cet.time()}]")
+            #         state.in_trade = False
+            #     else:
+            #         spread = tick.ask - tick.bid
+            #         sl_points = CONFIG['risk_management']['initial_sl_pips'] / contract_size
+            #         sl_points += spread
+            #         new_sl = (tick.ask - sl_points) if pos.type == mt5.ORDER_TYPE_BUY else (tick.bid + sl_points)
                     
-                    should_mod = False
-                    if pos.type == mt5.ORDER_TYPE_BUY and (pos.sl == 0 or new_sl > pos.sl): should_mod = True
-                    if pos.type == mt5.ORDER_TYPE_SELL and (pos.sl == 0 or new_sl < pos.sl): should_mod = True
+            #         should_mod = False
+            #         if pos.type == mt5.ORDER_TYPE_BUY and (pos.sl == 0 or new_sl > pos.sl): should_mod = True
+            #         if pos.type == mt5.ORDER_TYPE_SELL and (pos.sl == 0 or new_sl < pos.sl): should_mod = True
                     
-                    if should_mod:
-                        remove_tp = True
-                        tp = None
-                        if pos.type == mt5.ORDER_TYPE_BUY: tp_dist = pos.tp - tick.ask
-                        if pos.type == mt5.ORDER_TYPE_SELL: tp_dist = tick.bid - pos.tp
-                        if (pos.tp != 0) and (tp_dist <= 0.5):
-                            remove_tp = True
-                            tp = pos.tp
-                        print(f"Modifiying SL: {pos.sl} => {new_sl}")
-                        contract_size = contract_size
-                        sl_mod = modify_sl(symbol, pos.ticket, new_sl, remove_tp, tp, contract_size)
-                    else:
-                        sl_mod = True
+            #         if should_mod:
+            #             remove_tp = True
+            #             tp = None
+            #             if pos.type == mt5.ORDER_TYPE_BUY: tp_dist = pos.tp - tick.ask
+            #             if pos.type == mt5.ORDER_TYPE_SELL: tp_dist = tick.bid - pos.tp
+            #             if (pos.tp != 0) and (tp_dist <= 0.5):
+            #                 remove_tp = True
+            #                 tp = pos.tp
+            #             print(f"Modifiying SL: {pos.sl} => {new_sl}")
+            #             contract_size = contract_size
+            #             sl_mod = modify_sl(symbol, pos.ticket, new_sl, remove_tp, tp, contract_size)
+            #         else:
+            #             sl_mod = True
             
             if not sl_mod: # sl_mod prev failed
                 print("Resetting max pnl")
@@ -831,7 +847,7 @@ def main(magic_num=0):
             
             for s in CONFIG['risk_management']['trailing_stages']:
                 # print(f"{state.max_pnl} || {s['min_profit']}")
-                if state.max_pnl >= s['min_profit'] / 2:
+                if state.max_pnl >= s['min_profit']:
                     best_retention = s['retention']
                     triggered = True
             # best_retention = 0.5
@@ -879,20 +895,22 @@ def main(magic_num=0):
 
                 # BUY LOGIC
                 if bias == 'buy':
-                    success, price = execute_trade(symbol, contract_size, 'buy', CONFIG['risk_management']['initial_sl_pips'], CONFIG['risk_management']['trailing_stages'][0]['max_profit'])
+                    success, price = execute_trade(symbol, contract_size, 'buy', trend, CONFIG['risk_management']['initial_sl_pips']) #, CONFIG['risk_management']['trailing_stages'][0]['max_profit'])
                     print(f"Entered Buy at {now_cet} [{tick.ask}]")
                     if success:
                         state.in_trade = True
                         state.entry_price = price
+                        bias = "straddle"
                         entry_time = now_cet.time()
 
                 # SELL LOGIC
                 elif bias == 'sell':
-                    success, price = execute_trade(symbol, contract_size, 'sell', CONFIG['risk_management']['initial_sl_pips'], CONFIG['risk_management']['trailing_stages'][0]['max_profit'])
+                    success, price = execute_trade(symbol, contract_size, 'sell', trend, CONFIG['risk_management']['initial_sl_pips']) #, CONFIG['risk_management']['trailing_stages'][0]['max_profit'])
                     print(f"Entered Sell at {now_cet} [{tick.bid}]")
                     if success:
                         state.in_trade = True
                         state.entry_price = price
+                        bias = "straddle"
                         entry_time = now_cet.time()
             else:
                 t = datetime.now().astimezone(UTC1).time()
