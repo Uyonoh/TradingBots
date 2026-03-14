@@ -148,7 +148,7 @@ if __name__ == "__main__":
 
     loader = DataLoader(symbol='GER40', data_dir='./tick_data')
     loader.fetch_and_store_range(
-        start_date=datetime(2026,1,1, tzinfo=UTC),
+        start_date=datetime(2025,1,1, tzinfo=UTC),
         end_date=datetime(2026,3,31, tzinfo=UTC),
         ext="csv"
     )
