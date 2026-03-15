@@ -44,7 +44,7 @@ PRO_SETUP = {
             ],
         'tp_override': {'fast_threshold': np.int64(15), 'slow_threshold': np.int64(120)}}, 
         'session_constraints': {
-            'day_open': '09:00', 'entry_start': '7:00', 'mandatory_close': '17:00',
+            'day_open': '09:00', 'entry_start': '9:00', 'mandatory_close': '17:00',
             'ghost_open': '08:00', 'ghost_close': '08:15',
             }
         }
@@ -153,10 +153,28 @@ class SignalPrecomputer:
         m1 = raw_biases.shift(1)
         
         # If m0 and m1 match, use that value; otherwise, "straddle"
-        df ["rc"] = rc
-        df["bias"] = raw_biases
-        df["2m_bias"] = np.where(m0 == m1, m0, "straddle")
-        df["2m_bias"] = df["2m_bias"].shift(1, fill_value="straddle")
+        # df ["rc"] = rc
+        # df["bias"] = raw_biases
+        # df["2m_bias"] = np.where(m0 == m1, m0, "straddle")
+
+        df['bias'] = 'straddle'
+        df["rc"] = df["close"] - df["open"]
+        df['2m_bias'] = 'straddle'
+        lookback = 2
+        threshold = 10
+        # 1. Pre-calculate the difference once (saves memory and CPU)
+        price_diff = df['close'].shift(1) - df['close'].shift(lookback + 1)
+
+        # 2. Use .between() for the 'buy' logic
+        # inclusive='both' ensures it captures the threshold values exactly
+        buy_mask = price_diff.between(threshold, threshold * 2, inclusive='both')
+        df.loc[buy_mask, '2m_bias'] = 'buy'
+
+        # 3. Use .between() for the 'sell' logic
+        sell_mask = price_diff.between(threshold * -2, -threshold, inclusive='both')
+        df.loc[sell_mask, '2m_bias'] = 'sell'
+
+        # df["2m_bias"] = df["2m_bias"].shift(1, fill_value="straddle")
         
         # Optional: Fill the very first row which becomes NaN after shift
         df["2m_bias"] = df["2m_bias"].fillna("straddle")
@@ -168,7 +186,7 @@ class SignalPrecomputer:
         
         df['trend'] = 'straddle'
         df.loc[df['close'].shift(1) - df['close'].shift(lookback + 1) > threshold, 'trend'] = 'buy'
-        df.loc[df['close'].shift(1) - df['close'].shift(lookback + 1) < threshold, 'trend'] = 'sell'
+        df.loc[df['close'].shift(1) - df['close'].shift(lookback + 1) < -threshold, 'trend'] = 'sell'
 
         biases = df['trend']
         
@@ -283,6 +301,8 @@ def process_chunk_parallel(year, month, config):
     # 1. Precompute Signals (Vectorized)
     biases = SignalPrecomputer.get_bias(df, config['bias_filter']['buy_threshold'], config['bias_filter']['sell_threshold'])
     trend = SignalPrecomputer.get_trend(df, config['bias_filter']['buy_threshold'], config['bias_filter']['sell_threshold'])
+    # biases.to_csv("biases.csv")
+    # return []
 
     # ===================================
     # Handle tick data
@@ -806,7 +826,7 @@ if __name__ == "__main__":
     else:
         engine = DAXTickEngine(PRO_SETUP)
         # Example: Run for 2025
-        results = engine.run_backtest(2026, 1, 2026, 3)
+        results = engine.run_backtest(2025, 1, 2025, 12)
         
         if not results.empty:
             results = calculate_equity(results)
