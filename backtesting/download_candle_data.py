@@ -88,6 +88,7 @@ class DataLoader:
             "M1" : mt5.TIMEFRAME_M1,
             "M5" : mt5.TIMEFRAME_M5,
             "M10": mt5.TIMEFRAME_M10,
+            "M15": mt5.TIMEFRAME_M15,
             "H1" : mt5.TIMEFRAME_H1,
             "H4" : mt5.TIMEFRAME_H4,
             "D1" : mt5.TIMEFRAME_D1,
@@ -146,7 +147,7 @@ if __name__ == "__main__":
     # downloader = TickDownloader("GER40")
     # downloader.download_ticks()
 
-    loader = DataLoader(symbol='GER40', data_dir='./tick_data')
+    loader = DataLoader(symbol='GER40', data_dir='./tick_data', timeframe="H1")
     loader.fetch_and_store_range(
         start_date=datetime(2025,1,1, tzinfo=UTC),
         end_date=datetime(2026,3,31, tzinfo=UTC),
