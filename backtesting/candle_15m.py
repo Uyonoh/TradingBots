@@ -203,7 +203,7 @@ class SignalPrecomputer:
         return df["2m_bias"].to_dict()
     
     @staticmethod
-    def get_trend(df, buy_t, sell_t, lookback=5, threshold=5):
+    def get_trend(df, buy_t, sell_t, lookback=4, threshold=50):
         
         df['trend'] = 'straddle'
         df.loc[df['close'].shift(1) - df['close'].shift(lookback + 1) > threshold, 'trend'] = 'buy'
@@ -372,6 +372,7 @@ def process_chunk_parallel(year, month, config):
     day_traded = None
     min_traded = None
     half_sl = False
+    use_trend = False
     
     # Trade State variables
     entry_p = 0.0
@@ -406,6 +407,7 @@ def process_chunk_parallel(year, month, config):
         # New Day Reset
         if curr_date == day_traded:
             daily_pnl = 0.0
+            use_trend = False
             continue
 
         if curr_min == min_traded:
@@ -420,7 +422,12 @@ def process_chunk_parallel(year, month, config):
         # if curr_t.minute < 38 or curr_t.minute > 47:
         #     continue
 
-        # if daily_pnl <= -50:
+        if daily_pnl <= -100:
+            # day_traded = curr_date
+            use_trend = True
+        else:
+            use_trend = False
+        # if daily_pnl <= -150:
         #     day_traded = curr_date
         
 
@@ -473,10 +480,10 @@ def process_chunk_parallel(year, month, config):
             
             if retention == -1:
                 stop_level = (entry_p - (sl_initial / contract_size)) if direction == 'buy' else (entry_p + (sl_initial / contract_size))
-                # if direction == "buy":
-                #     stop_level -= spread
-                # else:
-                #     stop_level += spread
+                if direction == "buy":
+                    stop_level -= spread
+                else:
+                    stop_level += spread
                 if half_sl:
                     stop_level = (stop_level + (sl_initial / contract_size)/2) if direction == 'buy' else (stop_level - (sl_initial / contract_size)/2)
             else:
@@ -505,12 +512,13 @@ def process_chunk_parallel(year, month, config):
                 
         # ENTRY LOGIC
         elif is_entry_window and not is_spread_wide:
-            if trend_str == 'straddle': continue
-            # if bias_str == 'straddle': continue
+            if bias_str == 'straddle': continue
+            if use_trend:
+                if trend_str == 'straddle': continue
 
-            if bias_str != trend_str:
-                # half_sl = True
-                pass
+            if use_trend and bias_str != trend_str:
+                half_sl = True
+                # pass
             
             if bias_str == 'buy':
                 in_trade, direction, entry_p, entry_t, max_pnl, spread = True, 'buy', curr_ask, curr_time, 0.0, curr_spread
@@ -850,7 +858,7 @@ if __name__ == "__main__":
     else:
         engine = DAXTickEngine(PRO_SETUP)
         # Example: Run for 2025
-        results = engine.run_backtest(2025, 10, 2026, 3)
+        results = engine.run_backtest(2025, 1, 2026, 3)
         
         if not results.empty:
             results = calculate_equity(results)
