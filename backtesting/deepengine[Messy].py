@@ -410,7 +410,7 @@ def process_chunk_parallel(year, month, config):
                 'direction': direction, 'profit_ticks': pnl, 'max_pnl': max_pnl, 'reason': 'Mandatory close', 'current density': curr_den, 'avg density': avg_den}
                 trades.append(trade)
                 
-                print(trade)
+                # print(trade)
                 # print(df.iloc[[i]])
                 
                 in_trade = False
@@ -420,7 +420,7 @@ def process_chunk_parallel(year, month, config):
             
             # Trailing Stop Calculation
             pnl = (curr_bid - entry_p) if direction == 'buy' else (entry_p - curr_ask)
-            pnl += spread
+            # pnl += spread # Essentially trying to 'level' up the loss bias ???
             pnl *= contract_size
             max_pnl = max(max_pnl, pnl)
             
@@ -433,13 +433,14 @@ def process_chunk_parallel(year, month, config):
             
             if retention == -1:
                 stop_level = (entry_p - (sl_initial / contract_size)) if direction == 'buy' else (entry_p + (sl_initial / contract_size))
+                if direction == "buy":
+                    stop_level -= spread
+                else:
+                    stop_level += spread
             else:
                 trail_dist = max_pnl * retention
                 stop_level = (entry_p + (trail_dist / contract_size)) if direction == 'buy' else (entry_p - (trail_dist / contract_size))
-            if direction == "buy":
-                stop_level -= spread
-            else:
-                stop_level += spread
+
             
             # Check Stop Hit
             if (direction == 'buy' and curr_bid <= stop_level) or (direction == 'sell' and curr_ask >= stop_level):
@@ -447,7 +448,7 @@ def process_chunk_parallel(year, month, config):
                 'direction': direction, 'profit_ticks': pnl, 'max_pnl': max_pnl, 'reason': 'stop', 'retention': retention, 'current density': curr_den, 'avg density': avg_den}
                 trades.append(trade)
                 
-                print(trade)
+                # print(trade)
                 # print(df.iloc[[i]])
 
                 in_trade = False
@@ -476,7 +477,7 @@ def process_chunk_parallel(year, month, config):
                 if touched_opposite and curr_ask >= g_high - (buffer / contract_size) and velocity_signals[i] and curr_ask > daily_opens[curr_date] and mom:
                     in_trade, direction, entry_p, entry_t, max_pnl, spread = True, 'buy', curr_ask, curr_time, 0.0, curr_spread
                     # print(n_ticks)
-                    print("Entered buy")
+                    # print("Entered buy")
                     curr_den = densities[0][i]
                     avg_den = densities[1][i]
                     
@@ -488,7 +489,7 @@ def process_chunk_parallel(year, month, config):
                 if touched_opposite and curr_bid <= g_low + (buffer / contract_size) and velocity_signals[i] and curr_bid < daily_opens[curr_date] and mom:
                     in_trade, direction, entry_p, entry_t, max_pnl, spread = True, 'sell', curr_bid, curr_time, 0.0, curr_spread
                     # print(n_ticks)
-                    print(f"Entered sell: {entry_p, entry_t}")
+                    # print(f"Entered sell: {entry_p, entry_t}")
                     curr_den = densities[0][i]
                     avg_den = densities[1][i]
 
@@ -815,7 +816,7 @@ if __name__ == "__main__":
     else:
         engine = DAXTickEngine(PRO_SETUP)
         # Example: Run for 2025
-        results = engine.run_backtest(2026, 3, 2026, 3)
+        results = engine.run_backtest(2025, 6, 2025, 12)
         
         if not results.empty:
             results = calculate_equity(results)
