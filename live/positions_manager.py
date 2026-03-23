@@ -36,7 +36,7 @@ MAX_RETRIES = 5
 TIMEOUT = 1
 
 DEVIATION = 10    # Slippage tolerance in points
-MAGIC_NUM += "02"
+MAGIC_NUM += "0234"
 MAGIC_NUM = int(MAGIC_NUM)
 r1 = 50
 
@@ -46,12 +46,10 @@ CONFIG = {
     'risk_management': {
         'initial_sl_pips': 50, 
         'trailing_stages': [
-            {'min_profit': 0,   'max_profit': r1,  'retention': -1}, 
-            {'min_profit': r1,  'max_profit': 60,  'retention': 0.5}, 
-            {'min_profit': 60,  'max_profit': 90,  'retention': 0.7}, 
-            {'min_profit': 90,  'max_profit': 120, 'retention': 0.8}, 
-            {'min_profit': 120, 'max_profit': 150, 'retention': 0.9}, 
-            {'min_profit': 150, 'retention': 0.95}
+            {'min_profit': 0,   'max_profit': 70,  'retention': -1}, 
+            {'min_profit': 70,  'max_profit': 90,  'retention': 0.7}, 
+            {'min_profit': 90,  'max_profit': 120, 'retention': 0.9}, 
+            {'min_profit': 120, 'retention': 0.95}
             ]
         },
     'session': {
@@ -100,13 +98,13 @@ class StrategyState:
         self.max_pnl = 0.0
 
 
-def close_positions(symbol):
+def close_positions(symbol, magic):
     """Closes all positions with our Magic Number"""
     positions = mt5.positions_get(symbol=symbol)
     if positions is None:
         return
     for pos in positions:
-        if 1:#pos.magic == MAGIC_NUM:
+        if pos.magic == magic:
             tick = mt5.symbol_info_tick(symbol)
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
@@ -136,13 +134,13 @@ def modify_sl(symbol, ticket, new_sl):
         print(f"{new_sl}")
 
 
-def delete_orders(symbol):
+def delete_orders(symbol, magic):
     """Delete all orders with our Magic Number"""
     orders = mt5.orders_get(symbol=symbol)
     if orders is None:
         return
     for pos in orders:
-        if pos.magic == MAGIC_NUM:
+        if pos.magic == magic:
             request = {
                 "action": mt5.TRADE_ACTION_REMOVE,
                 "order": pos.ticket,
@@ -295,11 +293,12 @@ def main():
         #     return
         
         total_loss = sum(pos.profit for pos in my_pos if pos.profit < 0)
-        max_loss = -4
+        max_loss = -3.5
         if total_loss < (max_loss):
             print(f"Loss {total_loss} beyond {max_loss}")
             print(f"    Aborting trade")
-            close_positions(symbol)
+            close_positions(symbol, MAGIC_NUM)
+            delete_orders(symbol, MAGIC_NUM)
         
 
         
@@ -329,9 +328,13 @@ def main():
             # Check Stages
             best_retention = 0.0
             triggered = False
+            tp_ratio = 1
+            if pos.tp != 0.0:
+                tp_pips = abs(pos.price_open - pos.tp) / contract_size
+                tp_ratio = tp_pips / 100 # TODO: 100 is based on the max tp of set
             
             for s in CONFIG['risk_management']['trailing_stages']:
-                if states[pos.ticket].max_pnl >= s['min_profit']:
+                if states[pos.ticket].max_pnl >= s['min_profit'] * tp_ratio:
                     best_retention = s['retention']
                     triggered = True
 
