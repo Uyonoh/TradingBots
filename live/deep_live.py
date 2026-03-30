@@ -245,7 +245,7 @@ class SessionTimeManager:
         }
     
     def is_in_pretrading_hours(self, current_time: datetime) -> bool:
-        """Check if current time is within pretrading hours. (3 hours before)"""
+        """Check if current time is within pretrading hours. (h hours before)"""
         session_times = self.get_session_times(current_time.date())
         h = CONFIG['session']['pre-trading']
         return session_times['session_start'] - timedelta(hours=h) <= current_time < session_times['session_end']
@@ -552,7 +552,7 @@ CONFIG = {
         ]
     },
     'session': {
-        'pre-trading': 3, # Hours
+        'pre-trading': 1, # Hours
         'day_open': '9:00',
         'trading_start': '10:00',
         'trading_end': '17:00',
@@ -751,7 +751,7 @@ class OptimizedVelocityMonitor:
         # self.logger.debug(f"High velocity: {is_high}. Current: {current_density} || {avg_density * multiplier} [{avg_density} X {multiplier}]")
         if is_high:
             self.logger.info(
-                f"High velocity: {current_density:.2f} > {avg_density:.2f} × {multiplier}"
+                f"High velocity: {current_density:.2f} > {avg_density:.2f} X {multiplier}"
             )
         return is_high
     
