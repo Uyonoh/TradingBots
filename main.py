@@ -298,10 +298,71 @@ class TradingBot:
     def order_sell_limit(self):
         print("Sell LIMIT ORDER")
     
-    def doublebanger(self, inputs: dict=None, **kwargs):
+    def banger(self, inputs: dict=None, **kwargs):
         if inputs is None:
             inputs = self.get_inputs(["num_orders"])
         return doublebanger(self, inputs, **kwargs)
+    
+    def doublebanger(self, inputs: dict=None, **kwargs):
+        if inputs is None:
+            inputs = self.get_inputs(["num_orders"])
+
+        positions = doublebanger(self, inputs, confirm=False, autocomplete=True)
+        pending_order = positions[0]
+        opp_direction = positions[-2]
+        dir_multiplier = positions[-1]
+        order_filled = False
+
+        initial_entry = inputs["entry"]
+        sl_pips = inputs["sl pips"]
+        tp_pips = inputs["tp pips"]
+        orders = inputs["num_orders"]
+        lot_size = inputs.get("lot_size", 0.01)
+
+        spacing_pips = tp_pips / orders
+        doubled_pos = [2, 5, 9]
+        
+        symbol_ticks = self.get_symbol_ticks()
+        spread = symbol_ticks.ask - symbol_ticks.bid
+        initial_entry = initial_entry - (spread * dir_multiplier)
+        
+            
+
+        order_still_pending = True
+        # dir_multiplier = -1 if direction == "buy" else 1
+        # initial_entry = initial_entry - (spacing_pips * bot.pip_value * dir_multiplier)
+        while order_still_pending:
+            self.logger.info("Waiting for orders to be filled..")
+            time.sleep(0.1)
+
+            active_orders = mt5.orders_get(symbol=self.symbol)
+            if not active_orders:
+                break
+            active_tickets = [order.ticket for order in active_orders]
+            order_still_pending = pending_order in active_tickets
+
+            if not order_still_pending:
+                for i in range(1, orders):
+                    lots = lot_size
+                    if i in doubled_pos:
+                        lots = lot_size * 2
+                    entry = initial_entry - (i * spacing_pips * dir_multiplier)
+                    tp = tp_pips - (i * orders)
+                    sl = sl_pips
+                
+                    order(
+                        symbol=bot.symbol,
+                        order_type=f"{opp_direction} stop",
+                        start_price=entry,
+                        spacing_pips=0,
+                        num_orders=1,
+                        volume_per_order=lots,
+                        stop_loss_pips=sl,
+                        take_profit_pips=tp
+                    )
+                order_filled = True
+
+
 
     def daily_banger(self, **kwargs):
         rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_D1, 0, 1)
@@ -332,7 +393,7 @@ class TradingBot:
 
         for pos,v in positions.items():
             inputs["entry"] =  v["entry"]
-            positions[pos]["positions"] = self.doublebanger(inputs=inputs, confirm=False, autocomplete=True)
+            positions[pos]["positions"] = self.banger(inputs=inputs, confirm=False, autocomplete=True)
             positions[pos]["pending_order"] = positions[pos]["positions"][0]
 
         # Wait for orders to be filled
@@ -417,7 +478,7 @@ class TradingBot:
                 bottom_filled = True
         # When one is filed cancel the other
         level = "top" if bottom_filled else "bottom"
-        active_tickets = positions[level]["positions"]
+        active_tickets = positions[level]["positions"][:-2] # last 2 are not pos
         for i, ticket in enumerate(active_tickets):
             request = {
                 "action": mt5.TRADE_ACTION_REMOVE,

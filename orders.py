@@ -1,6 +1,6 @@
 import os
+import sys
 import argparse
-import MetaTrader5 as mt5
 import sqlite3
 # import pandas as pd
 from dotenv import load_dotenv
@@ -8,11 +8,25 @@ import logging
 load_dotenv()
 # PnL = price_delta × volume × contract_size
 
+if sys.platform == "linux":
+    from mt5linux import MetaTrader5
+    mt5 = MetaTrader5()
+    islinux = True
+    MAGIC_NUM = "10"
+elif sys.platform == "win32":
+    import MetaTrader5 as mt5
+    islinux = False
+    MAGIC_NUM = "20"
+else:
+    raise RuntimeError(f"Unknown platform {sys.platform}. Must be 'win32' or 'linux'")
+
 get_db_connection = lambda: sqlite3.connect("trades.db.sqlite3")
 
 LOGIN = int(os.environ["ACCOUNT_ID"])
 PASSWORD = os.environ["PASSWORD"]
 SERVER = os.environ["SERVER"]
+MAGIC_NUM += "00"
+MAGIC_NUM = int(MAGIC_NUM)
 
 symbol_pips = {
         "XAU": 10,
@@ -98,7 +112,7 @@ def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, s
             "sl": round(sl_price, 6) if sl_price else 0.0,
             "tp": round(tp_price, 6) if tp_price else 0.0,
             "deviation": 20,                         # Max price deviation in points
-            "magic": 123456,                         # Unique EA/script identifier
+            "magic": MAGIC_NUM,                         # Unique EA/script identifier
             "comment": f"Grid {order_type} order {i+1}",
             "type_time": mt5.ORDER_TIME_GTC,         # Good Till Cancelled
             "type_filling": mt5.ORDER_FILLING_IOC,   # Execution policy[citation:1]
@@ -169,7 +183,7 @@ def place_buy_grid(start_price, spacing_pips, num_orders, volume_per_order, stop
             "sl": round(sl_price, 6) if sl_price else 0.0,
             "tp": round(tp_price, 6) if tp_price else 0.0,
             "deviation": 20,                         # Max price deviation in points
-            "magic": 123456,                         # Unique EA/script identifier
+            "magic": MAGIC_NUM,                         # Unique EA/script identifier
             "comment": f"Grid buy order {i+1}",
             "type_time": mt5.ORDER_TIME_GTC,         # Good Till Cancelled
             "type_filling": mt5.ORDER_FILLING_IOC,   # Execution policy[citation:1]
@@ -239,10 +253,10 @@ def doublebanger_orders(bot, inputs, direction, autocomplete=False):
         # dir_multiplier = -1 if direction == "buy" else 1
         # initial_entry = initial_entry - (spacing_pips * bot.pip_value * dir_multiplier)
         while pending:
-            if input(f'Enter "{direction.upper()}" to place remaining sell stops: ') == direction.upper():
+            if input(f'Enter "{opp_direction.upper()}" to place remaining sell stops: ') == opp_direction.upper():
                 symbol_ticks = mt5.symbol_info_tick(bot.symbol)
                 # Using initial directional bias
-                if direction == "sell": # initial = buy
+                if opp_direction == "sell": # initial = buy
                     if symbol_ticks.ask < initial_entry:
                         bot.logger.error("Market price still below %s", initial_entry)
                         continue
@@ -260,7 +274,7 @@ def doublebanger_orders(bot, inputs, direction, autocomplete=False):
                 
                     order(
                         symbol=bot.symbol,
-                        order_type=f"{direction} stop",
+                        order_type=f"{opp_direction} stop",
                         start_price=entry,
                         spacing_pips=0,
                         num_orders=1,
@@ -270,6 +284,8 @@ def doublebanger_orders(bot, inputs, direction, autocomplete=False):
                     )
                 pending = False
     else:
+        # TODO: Use dict instead
+        positions.extend([opp_direction, dir_multiplier])
         return positions
 
 def doublebanger(bot, inputs, confirm=True, autocomplete=False):
@@ -293,7 +309,7 @@ def doublebanger(bot, inputs, confirm=True, autocomplete=False):
                 return
         positions = doublebanger_orders(bot, inputs, "sell", autocomplete)
 
-    if autocomplete:
+    if autocomplete and positions:
         return positions
     
 
