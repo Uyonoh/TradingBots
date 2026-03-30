@@ -494,9 +494,12 @@ class TradingBot:
     
     def __del__(self):
         """Ensures the connection is closed when the object is destroyed."""
-        mt5.shutdown()
-        # logging.info is safer than self.logger.info here during cleanup
-        logging.info(f"MT5 connection closed for {self.name}")
+        try:
+            mt5.shutdown()
+            # logging.info is safer than self.logger.info here during cleanup
+            logging.info(f"MT5 connection closed for {self.name}")
+        except Exception as e:
+            logging.error(f"Shutdown failed with error:\n\t{e}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="automate trades")
