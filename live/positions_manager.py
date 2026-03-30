@@ -36,7 +36,7 @@ MAX_RETRIES = 5
 TIMEOUT = 1
 
 DEVIATION = 10    # Slippage tolerance in points
-MAGIC_NUM += "0234"
+MAGIC_NUM += "00"
 MAGIC_NUM = int(MAGIC_NUM)
 r1 = 50
 
@@ -133,6 +133,18 @@ def modify_sl(symbol, ticket, new_sl):
         print(f"SL modification Failed: {result.comment}")
         print(f"{new_sl}")
 
+def remove_tp(symbol, ticket):
+    request = {
+        "action": mt5.TRADE_ACTION_SLTP,
+        "symbol": symbol,
+        "position": ticket,
+        "tp": 0.0,
+        "magic": MAGIC_NUM
+    }
+    result = mt5.order_send(request)
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        print(f"TP modification Failed: {result.comment}")
+
 
 def delete_orders(symbol, magic):
     """Delete all orders with our Magic Number"""
@@ -227,16 +239,17 @@ def get_server_time_cet(symbol):
 # MAIN LOOP
 # -------------------------------------------------------------------
 
-def main():
+def main(args_list=None):
     parser = argparse.ArgumentParser(description="Live trading momentum based bot for HFM")
 
     parser.add_argument("symbol", help="symbol to be traded")
-    parser.add_argument("--magic", type=int, default=123456, help="Unique magic number for bot")
+    parser.add_argument("--magic", type=int, default=MAGIC_NUM, help="Unique magic number for bot")
+    parser.add_argument("--keep-alive", action="store_true", help="Keep manager active with no open positions")
 
-    args = parser.parse_args()
+    args = parser.parse_args(args_list)
 
     symbol = args.symbol.strip().upper()
-    MAGIC_NUM = args.magic
+    magic_num = args.magic
 
     if not mt5.initialize():
         err = mt5.last_error()
@@ -262,7 +275,7 @@ def main():
     logged_m = 0
 
     positions = mt5.positions_get(symbol=symbol)
-    my_pos = [p for p in positions if p.magic == MAGIC_NUM]
+    my_pos = [p for p in positions if p.magic == magic_num]
     states = {}
     
 
@@ -279,7 +292,7 @@ def main():
             print("Failed to retrieve positions:", mt5.last_error())
             continue
 
-        my_pos = [p for p in positions if p.magic == MAGIC_NUM]
+        my_pos = [p for p in positions if p.magic == magic_num]
         open_pos = len(my_pos) > 0
         tick = mt5.symbol_info_tick(symbol)
 
@@ -288,17 +301,19 @@ def main():
                 states[pos.ticket] = StrategyState()
                 states[pos.ticket].in_trade = True
 
-        # if not open_pos:
-        #     print(f"No positions found for {symbol}, exiting...")
-        #     return
+        if not open_pos and not args.keep_alive:
+            print(f"No positions found for {symbol}, exiting...")
+            return
         
         total_loss = sum(pos.profit for pos in my_pos if pos.profit < 0)
-        max_loss = -3.5
+        pos_len = len(my_pos)
+        max_loss = max(-3.5, pos_len * -0.5)
         if total_loss < (max_loss):
-            print(f"Loss {total_loss} beyond {max_loss}")
+            print(f"Loss {total_loss} beyond {max_loss} with {pos_len} position(s)")
             print(f"    Aborting trade")
-            close_positions(symbol, MAGIC_NUM)
-            delete_orders(symbol, MAGIC_NUM)
+            close_positions(symbol, magic_num)
+            delete_orders(symbol, magic_num)
+            return
         
 
         
@@ -329,12 +344,20 @@ def main():
             best_retention = 0.0
             triggered = False
             tp_ratio = 1
+            dist_to_tp = None
             if pos.tp != 0.0:
                 tp_pips = abs(pos.price_open - pos.tp) / contract_size
                 tp_ratio = tp_pips / 100 # TODO: 100 is based on the max tp of set
+
+                if pos.type == mt5.ORDER_TYPE_BUY:
+                    dist_to_tp = pos.tp - tick.bid
+                else:
+                    dist_to_tp = tick.ask - pos.tp
+
+                
             
             for s in CONFIG['risk_management']['trailing_stages']:
-                if states[pos.ticket].max_pnl >= s['min_profit'] * tp_ratio:
+                if states[pos.ticket].max_pnl >= s['min_profit'] * tp_ratio/2:
                     best_retention = s['retention']
                     triggered = True
 
@@ -356,6 +379,8 @@ def main():
                     if should_mod:
                         print(f"Modified SL: {pos.sl} => {new_sl}")
                         modify_sl(symbol, pos.ticket, new_sl)
+                        if dist_to_tp is not None and dist_to_tp <= 8:
+                            remove_tp(symbol, pos.ticket)
 
     states = {}
     session_closed = False
