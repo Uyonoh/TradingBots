@@ -1,11 +1,13 @@
 import os
 import sys
+import datetime
 import time
 import argparse
 # import pandas as pd
 from dotenv import load_dotenv
 import logging
 from orders import order, doublebanger, get_pending_orders, get_open_positions
+from live.positions_manager import main as launch_pos_manager
 load_dotenv()
 
 if sys.platform == "linux":
@@ -361,6 +363,7 @@ class TradingBot:
                         take_profit_pips=tp
                     )
                 order_filled = True
+                launch_pos_manager([self.symbol, "--max-tp", str(tp_pips)])
 
 
 
@@ -370,9 +373,21 @@ class TradingBot:
         rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_H1, 1, 1)
         day_open = rates[0]["close"] # H1 open = last close
         # Use current price and offset
+
+        # is_entry = False
+        # while not is_entry:
+        #     now = datetime.datetime.now().time()
+        #     target_time = datetime.time(1, 0)
+        #     end_time = datetime.time(1, 5)
+        #     if target_time <= now <= end_time:
+        #         is_entry = True
+        #         continue
+        #     print(f"Time not up to {target_time}, sleeping...")
+        #     time.sleep(30)
+
         tick =  mt5.symbol_info_tick(self.symbol)
         day_open = round((tick.ask + tick.bid) / 2, 5)
-        breadth = 10 + (tick.ask - tick.bid)/2
+        breadth = 5 + (tick.ask - tick.bid)/2
 
         positions = {
             "top": {
@@ -384,7 +399,7 @@ class TradingBot:
         }
         # sl_pips = args.slpips
         inputs = {
-                "lot_size":0.01, "sl pips": 50, "tp pips": 100,
+                "lot_size":0.01, "sl pips": 100, "tp pips": 100,
                 "spacing_pips": 10, "num_orders": 10
                 }
         
@@ -490,6 +505,8 @@ class TradingBot:
                 print(f"Order {i+1} on {level} failed, ticket={ticket}, retcode={result.retcode}, error={mt5.last_error()}")
             else:
                 print(f"Canceled order no {i+1} on {level}: {ticket}")
+
+        launch_pos_manager([self.symbol, "--max-tp", str(tp_pips)])
 
     
     def __del__(self):

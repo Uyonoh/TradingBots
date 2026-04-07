@@ -244,6 +244,8 @@ def main(args_list=None):
 
     parser.add_argument("symbol", help="symbol to be traded")
     parser.add_argument("--magic", type=int, default=MAGIC_NUM, help="Unique magic number for bot")
+    parser.add_argument("--max-tp", type=int, default=100, help="Max tp of active trades. Will be used to scale trails for all trades")
+    parser.add_argument("--scale", action="store_true", help="Scale all monitored trade's trails by max tp")
     parser.add_argument("--keep-alive", action="store_true", help="Keep manager active with no open positions")
 
     args = parser.parse_args(args_list)
@@ -307,7 +309,8 @@ def main(args_list=None):
         
         total_loss = sum(pos.profit for pos in my_pos if pos.profit < 0)
         pos_len = len(my_pos)
-        max_loss = max(-3.5, pos_len * -0.5)
+        max_loss = max(-5, pos_len * -0.75)
+        max_loss /= (100 / args.max_tp)
         if total_loss < (max_loss):
             print(f"Loss {total_loss} beyond {max_loss} with {pos_len} position(s)")
             print(f"    Aborting trade")
@@ -344,10 +347,12 @@ def main(args_list=None):
             best_retention = 0.0
             triggered = False
             tp_ratio = 1
+            trail_scale = args.max_tp / 100 # Initial is based on 100 tp
             dist_to_tp = None
             if pos.tp != 0.0:
                 tp_pips = abs(pos.price_open - pos.tp) / contract_size
-                tp_ratio = tp_pips / 100 # TODO: 100 is based on the max tp of set
+                tp_ratio = tp_pips / args.max_tp
+                tp_diff = args.max_tp - tp_pips
 
                 if pos.type == mt5.ORDER_TYPE_BUY:
                     dist_to_tp = pos.tp - tick.bid
@@ -357,7 +362,8 @@ def main(args_list=None):
                 
             
             for s in CONFIG['risk_management']['trailing_stages']:
-                if states[pos.ticket].max_pnl >= s['min_profit'] * tp_ratio/2:
+                # if states[pos.ticket].max_pnl >= s['min_profit'] * tp_ratio * trail_scale:
+                if states[pos.ticket].max_pnl >= (s['min_profit'] - tp_diff) * trail_scale:
                     best_retention = s['retention']
                     triggered = True
 
@@ -379,7 +385,7 @@ def main(args_list=None):
                     if should_mod:
                         print(f"Modified SL: {pos.sl} => {new_sl}")
                         modify_sl(symbol, pos.ticket, new_sl)
-                        if dist_to_tp is not None and dist_to_tp <= 8:
+                        if dist_to_tp is not None and dist_to_tp <= 20:
                             remove_tp(symbol, pos.ticket)
 
     states = {}
