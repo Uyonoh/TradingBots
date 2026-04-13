@@ -28,16 +28,7 @@ SERVER = os.environ["SERVER"]
 MAGIC_NUM += "00"
 MAGIC_NUM = int(MAGIC_NUM)
 
-symbol_pips = {
-        "XAU": 10,
-        "GER40": 100,
-        "USA30": 100,
-        "USA100": 100,
-        "#BTCUSD": 1000,
-        }
-
-
-def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, stop_loss_pips=None, take_profit_pips=None, symbol="GER40"):
+def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, stop_loss_pips=None, take_profit_pips=None, symbol="GER40", comment=None):
     """
     Places a grid of Buy Limit orders.
     
@@ -72,8 +63,7 @@ def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, s
     # 2. Prepare order request template[citation:1][citation:2]
     logging.info("Preparing request...")
     
-    point = mt5.symbol_info(symbol).point
-    pip_value = point * symbol_pips[symbol]
+    contract_size = mt5.symbol_info(symbol).trade_contract_size
 
     valid_order = ALLOWED_ORDERS.get(order_type.lower(), None)
     if valid_order is None:
@@ -87,11 +77,11 @@ def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, s
 
     orders = []
     for i in range(num_orders):
-        order_price = start_price + (i * spacing_pips * pip_value * direction_factor * limit_direction_factor)
+        order_price = start_price + (i * spacing_pips * contract_size * direction_factor * limit_direction_factor)
         
         # Calculate SL/TP prices if provided
-        sl_price = order_price - (stop_loss_pips * pip_value * direction_factor) if stop_loss_pips else 0.0
-        tp_price = order_price + (take_profit_pips * pip_value * direction_factor) if take_profit_pips else 0.0
+        sl_price = order_price - (stop_loss_pips * contract_size * direction_factor) if stop_loss_pips else 0.0
+        tp_price = order_price + (take_profit_pips * contract_size * direction_factor) if take_profit_pips else 0.0
 
         # Validate price, sl and tp by order type
         if side == "BUY" and not (sl_price < tp_price):
@@ -101,7 +91,10 @@ def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, s
         if side == "SELL" and not (sl_price > tp_price):
             logging.error((f"Configuration error: sl - {sl_price} "
                           f"less than tp - {tp_price} for a sell"))
-            return
+            
+            
+        if not comment:
+            comment = f"Grid {order_type} order {i+1}"
         
         request = {
             "action": mt5.TRADE_ACTION_PENDING,       # Place a pending order[citation:1]
@@ -113,9 +106,9 @@ def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, s
             "tp": round(tp_price, 6) if tp_price else 0.0,
             "deviation": 20,                         # Max price deviation in points
             "magic": MAGIC_NUM,                         # Unique EA/script identifier
-            "comment": f"Grid {order_type} order {i+1}",
+            "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,         # Good Till Cancelled
-            "type_filling": mt5.ORDER_FILLING_IOC,   # Execution policy[citation:1]
+            "type_filling": mt5.ORDER_FILLING_FOK,   # Execution policy[citation:1]
         }
         
         # 3. Send the order
@@ -128,7 +121,7 @@ def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, s
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             logging.error(f"Order {i+1} failed, retcode={result.retcode}, error={mt5.last_error()}")
         else:
-            logging.info(f"Order {i+1} placed successfully for {symbol} at {order_price}")
+            logging.info(f"Order {i+1} placed successfully for {symbol} at {order_price}. TP [{round(tp_price, 6)}] SL [{round(sl_price, 6)}]")
             save_new_position(result.order, symbol, side, volume_per_order, order_price)
 
         orders.append(result.order)
@@ -163,16 +156,14 @@ def place_buy_grid(start_price, spacing_pips, num_orders, volume_per_order, stop
     # 2. Prepare order request template[citation:1][citation:2]
     logging.info("Preparing request...")
     
-    point = mt5.symbol_info(symbol).point
-    
-    pip_value = point * symbol_pips[symbol]
+    contract_size = mt5.symbol_info(symbol).trade_contract_size
     
     for i in range(num_orders):
-        order_price = start_price - (i * spacing_pips * pip_value)
+        order_price = start_price - (i * spacing_pips * contract_size)
         
         # Calculate SL/TP prices if provided
-        sl_price = order_price - (stop_loss_pips * pip_value) if stop_loss_pips else 0.0
-        tp_price = order_price + (take_profit_pips * pip_value) if take_profit_pips else 0.0
+        sl_price = order_price - (stop_loss_pips * contract_size) if stop_loss_pips else 0.0
+        tp_price = order_price + (take_profit_pips * contract_size) if take_profit_pips else 0.0
         
         request = {
             "action": mt5.TRADE_ACTION_PENDING,       # Place a pending order[citation:1]
@@ -201,14 +192,19 @@ def place_buy_grid(start_price, spacing_pips, num_orders, volume_per_order, stop
         else:
             logging.info(f"Order {i+1} placed successfully for {symbol} at {order_price}")
     
-def doublebanger_orders(bot, inputs, direction, autocomplete=False):
+def doublebanger_orders(bot, inputs, direction, comment=None, autocomplete=False):
     positions = []
     initial_entry = inputs["entry"]
     sl_pips = inputs["sl pips"]
     tp_pips = inputs["tp pips"]
     orders = inputs["num_orders"]
+    spacing_pips = inputs["spacing_pips"]
+
+    if not isinstance(spacing_pips, (int, float)):
+            spacing_pips = 10 #tp_pips / orders
+            logging.info(f"Using spacing: {spacing_pips}")
+            
     lot_size = 0.01
-    spacing_pips = tp_pips / orders
     dir_multiplier = 1 if direction == "buy" else -1
 
     # Only need to track this, for following orders
@@ -222,7 +218,8 @@ def doublebanger_orders(bot, inputs, direction, autocomplete=False):
         num_orders=1,
         volume_per_order=lot_size,
         stop_loss_pips=sl_pips,
-        take_profit_pips=tp_pips
+        take_profit_pips=tp_pips,
+        comment=comment,
     )
     positions.append(pending_order)
     # positions.insert(0, pending_order)
@@ -231,8 +228,14 @@ def doublebanger_orders(bot, inputs, direction, autocomplete=False):
         lots = lot_size
         if i in [2, 5, 9]:
             lots = lot_size * 2
+
+        if i == (orders - 1):
+            lot_list = [0.01, 0.01, 0.02, 0.01, 0.01, 0.02, 0.01, 0.01, 0.01, 0.02]
+            final_lot = sum(lot_list[orders - 1:])
+            lots = final_lot
+
         entry = initial_entry + (i * spacing_pips * dir_multiplier)
-        tp = tp_pips - (i * orders)
+        tp = tp_pips - (i * spacing_pips)
         sl = sl_pips
     
         pos = order(
@@ -243,7 +246,8 @@ def doublebanger_orders(bot, inputs, direction, autocomplete=False):
             num_orders=1,
             volume_per_order=lots,
             stop_loss_pips=sl,
-            take_profit_pips=tp
+            take_profit_pips=tp,
+            comment=comment,
         )
         positions.append(pos)
     
@@ -268,8 +272,14 @@ def doublebanger_orders(bot, inputs, direction, autocomplete=False):
                     lots = lot_size
                     if i in [2, 5, 9]:
                         lots = lot_size * 2
+
+                    if i == (orders - 1):
+                        lot_list = [0.01, 0.01, 0.02, 0.01, 0.01, 0.02, 0.01, 0.01, 0.01, 0.02]
+                        final_lot = sum(lot_list[orders - 1:])
+                        lots = final_lot
+
                     entry = initial_entry - (i * spacing_pips * dir_multiplier)
-                    tp = tp_pips - (i * orders)
+                    tp = tp_pips - (i * spacing_pips)
                     sl = sl_pips
                 
                     order(
@@ -280,7 +290,8 @@ def doublebanger_orders(bot, inputs, direction, autocomplete=False):
                         num_orders=1,
                         volume_per_order=lots,
                         stop_loss_pips=sl,
-                        take_profit_pips=tp
+                        take_profit_pips=tp,
+                        comment=comment,
                     )
                 pending = False
     else:
@@ -288,7 +299,7 @@ def doublebanger_orders(bot, inputs, direction, autocomplete=False):
         positions.extend([opp_direction, dir_multiplier])
         return positions
 
-def doublebanger(bot, inputs, confirm=True, autocomplete=False):
+def doublebanger(bot, inputs, comment=None, confirm=True, autocomplete=False):
     symbol_ticks = bot.get_symbol_ticks()
     spread = symbol_ticks.ask - symbol_ticks.bid
     inputs["spread"] = spread
@@ -300,14 +311,16 @@ def doublebanger(bot, inputs, confirm=True, autocomplete=False):
             if input('Type "BUY" to continue: ') != "BUY":
                 bot.logger.error("Aborting operation")
                 return
-        positions =  doublebanger_orders(bot, inputs, "buy", autocomplete)
+        positions =  doublebanger_orders(bot, inputs, "buy", comment, autocomplete)
     elif inputs["entry"] < symbol_ticks.bid:
         bot.logger.info("Entry is below market price")
         if confirm:
             if input('Type "SELL" to continue: ') != "SELL":
                 bot.logger.error("Aborting operation")
                 return
-        positions = doublebanger_orders(bot, inputs, "sell", autocomplete)
+        positions = doublebanger_orders(bot, inputs, "sell", comment, autocomplete)
+    else:
+        raise ValueError("Price likely between ask and bid")
 
     if autocomplete and positions:
         return positions

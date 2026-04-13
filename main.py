@@ -88,7 +88,7 @@ def man():
 #     spread = symbol_ticks.ask - symbol_ticks.bid
 #     logging.info("Current spread is %s", spread)
 
-#     pip_value = mt5.symbol_info(symbol).point * symbol_pips[symbol]
+#     contract_size = mt5.symbol_info(symbol).point * symbol_pips[symbol]
 
 #     if start_price > symbol_ticks.ask:
 #         logging.info("Entry is above market price")
@@ -118,7 +118,7 @@ def man():
 #         )
         
 #         pending = True
-#         start_price -= 10 * pip_value
+#         start_price -= 10 * contract_size
 #         while pending:
 #             if input('Enter "SELL" to place remaining sell stops: ') == "SELL":
 #                 symbol_ticks = mt5.symbol_info_tick(symbol)
@@ -165,7 +165,7 @@ def man():
 #         )
         
 #         pending = True
-#         start_price += 10 * pip_value
+#         start_price += 10 * contract_size
 #         while pending:
 #             if input('Enter "BUY" to place remaining buy stops: ') == "BUY":
 #                 symbol_ticks = mt5.symbol_info_tick(symbol)
@@ -188,25 +188,14 @@ def man():
 #                 pending = False
     
 class TradingBot:
-    symbol_pips = {
-        "XAU": 10,
-        "GER40": 100,
-        "USA30": 100,
-        "USA100": 100,
-        "#BTCUSD": 1000,
-        }
     
     def __init__(self, symbol):
         symbol = symbol.upper()
         self.symbol = symbol
         self.name = f"{symbol}_bot"
         self.magic_number = 123456
+        self.contract_size = None
         self.logger = logging.getLogger(self.name) # Best practice: named logger
-
-        # 1. Validation
-        if symbol not in self.symbol_pips:
-            self.logger.error(f"Unsupported symbol: {symbol}")
-            raise ValueError(f"Symbol {symbol} not in supported list.")
 
         # 2. MT5 Initialization
         self.logger.info("Initializing MT5 connection...")
@@ -229,10 +218,12 @@ class TradingBot:
             mt5.shutdown()
             raise NameError(f"Symbol {symbol} is unavailable.")
         
-        # Calculate Pip Value
-        self.pip_value = info.point * self.symbol_pips[symbol]
+        self.contract_size = mt5.symbol_info(symbol).trade_contract_size
         
         self.logger.info(f"Successfully initialized {self.name} for {symbol}")
+        if not self.contract_size:
+            self.logger.error(f"No contract: {symbol}")
+            raise ValueError(f"Symbol {symbol} did not return a contract size.")
     
     def get_symbol_ticks(self):
         return mt5.symbol_info_tick(self.symbol)
@@ -254,7 +245,7 @@ class TradingBot:
                     try:
                         data[key] = float(data[key])
                     except Exception:
-                        logging.info("Input must be a number")
+                        logging.info(f"{key} : '{data[key]}' saved as string. Could not convert to number")
                         continue
                 valid = True
         
@@ -276,7 +267,16 @@ class TradingBot:
     def order_buystop(self):
         print("Buy stop ORDER")
         inputs = self.get_inputs()
-        print(inputs)
+        order(
+            symbol=self.symbol,
+            order_type="buy stop",
+            start_price=inputs["entry"],
+            spacing_pips=10.0,
+            num_orders=1,
+            volume_per_order=0.01,
+            stop_loss_pips=inputs["sl pips"],
+            take_profit_pips=inputs["tp pips"]
+        )
     
     def order_buylimit(self):
         inputs = self.get_inputs()
@@ -305,11 +305,13 @@ class TradingBot:
             inputs = self.get_inputs(["num_orders"])
         return doublebanger(self, inputs, **kwargs)
     
-    def doublebanger(self, inputs: dict=None, **kwargs):
+    def doublebanger(self, args, **kwargs):
+        inputs:dict = kwargs.get("inputs", None)
         if inputs is None:
-            inputs = self.get_inputs(["num_orders"])
+            inputs = self.get_inputs(["num_orders", "spacing_pips"])
 
-        positions = doublebanger(self, inputs, confirm=False, autocomplete=True)
+        comment = "Double " + args.comment
+        positions = doublebanger(self, inputs, comment=comment, confirm=False, autocomplete=True)
         pending_order = positions[0]
         opp_direction = positions[-2]
         dir_multiplier = positions[-1]
@@ -319,9 +321,13 @@ class TradingBot:
         sl_pips = inputs["sl pips"]
         tp_pips = inputs["tp pips"]
         orders = inputs["num_orders"]
+        spacing_pips = inputs["spacing_pips"]
         lot_size = inputs.get("lot_size", 0.01)
 
-        spacing_pips = tp_pips / orders
+        if not isinstance(spacing_pips, (int, float)):
+            spacing_pips = 10 #tp_pips / orders
+            self.logger.info(f"Using spacing: {spacing_pips}")
+
         doubled_pos = [2, 5, 9]
         
         symbol_ticks = self.get_symbol_ticks()
@@ -332,7 +338,7 @@ class TradingBot:
 
         order_still_pending = True
         # dir_multiplier = -1 if direction == "buy" else 1
-        # initial_entry = initial_entry - (spacing_pips * bot.pip_value * dir_multiplier)
+        # initial_entry = initial_entry - (spacing_pips * bot.contract_size * dir_multiplier)
         while order_still_pending:
             self.logger.info("Waiting for orders to be filled..")
             time.sleep(0.1)
@@ -348,8 +354,14 @@ class TradingBot:
                     lots = lot_size
                     if i in doubled_pos:
                         lots = lot_size * 2
+
+                    if i == (orders - 1):
+                        lot_list = [0.01, 0.01, 0.02, 0.01, 0.01, 0.02, 0.01, 0.01, 0.01, 0.02]
+                        final_lot = sum(lot_list[orders - 1:])
+                        lots = final_lot
+
                     entry = initial_entry - (i * spacing_pips * dir_multiplier)
-                    tp = tp_pips - (i * orders)
+                    tp = tp_pips - (i * spacing_pips)
                     sl = sl_pips
                 
                     order(
@@ -360,30 +372,54 @@ class TradingBot:
                         num_orders=1,
                         volume_per_order=lots,
                         stop_loss_pips=sl,
-                        take_profit_pips=tp
+                        take_profit_pips=tp,
+                        comment=comment,
                     )
                 order_filled = True
                 launch_pos_manager([self.symbol, "--max-tp", str(tp_pips)])
 
 
 
-    def daily_banger(self, **kwargs):
+    def daily_banger(self, args, **kwargs):
         rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_D1, 0, 1)
         day_open = rates[0]["open"]
         rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_H1, 1, 1)
         day_open = rates[0]["close"] # H1 open = last close
         # Use current price and offset
 
-        # is_entry = False
-        # while not is_entry:
-        #     now = datetime.datetime.now().time()
-        #     target_time = datetime.time(1, 0)
-        #     end_time = datetime.time(1, 5)
-        #     if target_time <= now <= end_time:
-        #         is_entry = True
-        #         continue
-        #     print(f"Time not up to {target_time}, sleeping...")
-        #     time.sleep(30)
+        if args.time:
+            try:
+                h, m = (int(t) for t in args.time.split(":"))
+                is_entry = False
+                while not is_entry:
+                    now = datetime.datetime.now()
+                    target_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                    if target_time < now:
+                        target_time  = target_time + datetime.timedelta(hours=24)
+                    end_time = target_time + datetime.timedelta(minutes=5)
+
+                    if target_time <= now <= end_time:
+                        is_entry = True
+                        continue
+                    print(f"Time not up to {target_time}...")
+                    if (now - target_time).seconds >= 65*60:
+                        print("Sleeping for 1 hour")
+                        time.sleep(60*60)
+                    elif (now - target_time).seconds >= 30*60:
+                        print("Sleeping for 10 minutes")
+                        time.sleep(10*60)
+                    elif (now - target_time).seconds >= 10*60:
+                        print("Sleeping for 5 minutes")
+                        time.sleep(5*60)
+                    elif (now - target_time).seconds >= 3*60:
+                        print("Sleeping for 1 minute")
+                        time.sleep(1*60)
+                    else:
+                        time.sleep(10)
+            except Exception as e:
+                raise Exception(f"Data error: {e}")
+        
+            
 
         tick =  mt5.symbol_info_tick(self.symbol)
         day_open = round((tick.ask + tick.bid) / 2, 5)
@@ -402,13 +438,14 @@ class TradingBot:
                 "lot_size":0.01, "sl pips": 100, "tp pips": 100,
                 "spacing_pips": 10, "num_orders": 10
                 }
+        comment = "Day " + args.comment + " "
         
         print(f"Initiating daily banger with inputs: {inputs}")
         print(f"MAGIC NUMBER: {self.magic_number}")
 
         for pos,v in positions.items():
             inputs["entry"] =  v["entry"]
-            positions[pos]["positions"] = self.banger(inputs=inputs, confirm=False, autocomplete=True)
+            positions[pos]["positions"] = self.banger(inputs=inputs, comment=comment+pos, confirm=False, autocomplete=True)
             positions[pos]["pending_order"] = positions[pos]["positions"][0]
 
         # Wait for orders to be filled
@@ -420,8 +457,13 @@ class TradingBot:
         orders = inputs["num_orders"]
         lot_size = inputs["lot_size"]
         symbol_ticks = self.get_symbol_ticks()
+        spacing_pips = inputs["spacing_pips"]
         spread = symbol_ticks.ask - symbol_ticks.bid
-        spacing_pips = tp_pips / orders
+        
+        if not isinstance(spacing_pips, (int, float)):
+            spacing_pips = 10 #tp_pips / orders
+            self.logger.info(f"Using spacing: {spacing_pips}")
+            
         doubled_pos = [2, 5, 9]
         
         
@@ -449,8 +491,14 @@ class TradingBot:
                     lots = lot_size
                     if i in doubled_pos:
                         lots = lot_size * 2
+
+                    if i == (orders - 1):
+                        lot_list = [0.01, 0.01, 0.02, 0.01, 0.01, 0.02, 0.01, 0.01, 0.01, 0.02]
+                        final_lot = sum(lot_list[orders - 1:])
+                        lots = final_lot
+                        
                     entry = initial_entry - (i * spacing_pips * dir_multiplier)
-                    tp = tp_pips - (i * orders)
+                    tp = tp_pips - (i * spacing_pips)
                     sl = sl_pips
                 
                     order(
@@ -461,7 +509,8 @@ class TradingBot:
                         num_orders=1,
                         volume_per_order=lots,
                         stop_loss_pips=sl,
-                        take_profit_pips=tp
+                        take_profit_pips=tp,
+                        comment=comment+"top",
                     )
                     # ==============================================
                 top_filled = True
@@ -476,8 +525,14 @@ class TradingBot:
                     lots = lot_size
                     if i in doubled_pos:
                         lots = lot_size * 2
+
+                    if i == (orders - 1):
+                        lot_list = [0.01, 0.01, 0.02, 0.01, 0.01, 0.02, 0.01, 0.01, 0.01, 0.02]
+                        final_lot = sum(lot_list[orders - 1:])
+                        lots = final_lot
+
                     entry = initial_entry - (i * spacing_pips * dir_multiplier)
-                    tp = tp_pips - (i * orders)
+                    tp = tp_pips - (i * spacing_pips)
                     sl = sl_pips
                 
                     order(
@@ -488,7 +543,8 @@ class TradingBot:
                         num_orders=1,
                         volume_per_order=lots,
                         stop_loss_pips=sl,
-                        take_profit_pips=tp
+                        take_profit_pips=tp,
+                        comment=comment+"bottom",
                     )
                 bottom_filled = True
         # When one is filed cancel the other
@@ -522,6 +578,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="automate trades")
     parser.add_argument("action",help="Market action")
     parser.add_argument("symbol", help="Symbol to be traded")
+    parser.add_argument("--comment", help="Comment for trade deals", default=datetime.datetime.now().strftime("%H:%M:%S"))
+    parser.add_argument("--time", help="start time with window of 5mins [hh:mm]")
     args = parser.parse_args()
 
     bot = TradingBot(args.symbol)
@@ -541,7 +599,7 @@ if __name__ == "__main__":
         # return
         pass
 
-    dispatch[action]()
+    dispatch[action](args)
 
 
 
