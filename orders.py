@@ -191,6 +191,150 @@ def place_buy_grid(start_price, spacing_pips, num_orders, volume_per_order, stop
             logging.error(f"Order {i+1} failed, retcode={result.retcode}, error={mt5.last_error()}")
         else:
             logging.info(f"Order {i+1} placed successfully for {symbol} at {order_price}")
+
+def make_request(order_type, start_price, volume_per_order, stop_loss_pips=None, take_profit_pips=None, symbol="GER40", comment=None):
+    """
+    Make mt5 request.
+    
+    Args:
+        symbol (str): Trading symbol (e.g., 'GER40', 'BTCUSD').
+        start_price (float): Price for the first order.
+        volume_per_order (float): Trade volume for each order.
+        stop_loss_pips (float): Optional SL distance in pips for all orders.
+        take_profit_pips (float): Optional TP distance in pips for all orders.
+    """
+
+    ALLOWED_ORDERS = {
+        "buy stop": mt5.ORDER_TYPE_BUY_STOP,
+        "buy limit": mt5.ORDER_TYPE_BUY_LIMIT,
+        # "buy stop limit": mt5.ORDER_TYPE_BUY_STOP_LIMIT,
+        "sell stop": mt5.ORDER_TYPE_SELL_STOP,
+        "sell limit": mt5.ORDER_TYPE_SELL_LIMIT,        
+        # "sell stop limit": mt5.ORDER_TYPE_SELL_STOP_LIMIT
+    }
+
+    logging.info("Recieved %s Order", order_type.capitalize())
+    # 1. Connect to MT5 (Update login/password/server for your broker)
+    # logging.info("Initializing MT5 client...")
+    # if not mt5.initialize(login=LOGIN, password=PASSWORD, server=SERVER):
+    #     logging.error(f"Initialization failed: {mt5.last_error()}")
+    #     logging.info(f"{LOGIN=} {PASSWORD=} {SERVER=}")
+    #     mt5.shutdown()
+    #     return
+    
+    # 2. Prepare order request template[citation:1][citation:2]
+    logging.info("Preparing request...")
+    
+    contract_size = mt5.symbol_info(symbol).trade_contract_size
+
+    valid_order = ALLOWED_ORDERS.get(order_type.lower(), None)
+    if valid_order is None:
+        logging.error(f"Invalid order type: {order_type}")
+        return
+    
+    side = "BUY" if "buy" in order_type.lower() else "SELL"
+    direction_factor = 1 if side == "BUY"  else -1
+    # Controls the direction of progressive limit trades
+    limit_direction_factor = -1 if "limit" in order_type.lower() else 1
+
+    orders = []
+    order_price = float(start_price)
+    
+    # Calculate SL/TP prices if provided
+    sl_price = order_price - (stop_loss_pips * contract_size * direction_factor) if stop_loss_pips else 0.0
+    tp_price = order_price + (take_profit_pips * contract_size * direction_factor) if take_profit_pips else 0.0
+    # Validate price, sl and tp by order type
+    if side == "BUY" and not (sl_price < tp_price):
+        logging.error((f"Configuration error: sl - {sl_price} "
+                      f"greater than tp - {tp_price} for a buy"))
+        return
+    if side == "SELL" and not (sl_price > tp_price):
+        logging.error((f"Configuration error: sl - {sl_price} "
+                      f"less than tp - {tp_price} for a sell"))
+        
+        
+    if not comment:
+        comment = f"Grid {order_type} order"
+    
+    request = {
+        "action": mt5.TRADE_ACTION_PENDING,       # Place a pending order[citation:1]
+        "symbol": symbol,
+        "volume": volume_per_order,
+        "type": valid_order,
+        "price": round(order_price, 6),          # Price of the pending order
+        "sl": round(sl_price, 6) if sl_price else 0.0,
+        "tp": round(tp_price, 6) if tp_price else 0.0,
+        "deviation": 20,                         # Max price deviation in points
+        "magic": MAGIC_NUM,                         # Unique EA/script identifier
+        "comment": comment,
+        "type_time": mt5.ORDER_TIME_GTC,         # Good Till Cancelled
+        "type_filling": mt5.ORDER_FILLING_IOC,   # Execution policy[citation:1]
+    }
+
+    return request
+
+def make_doublebanger_orders(bot, inputs, direction, comment=None, autocomplete=False):
+    requests = []
+    initial_entry = inputs["entry"]
+    sl_pips = inputs["sl pips"]
+    tp_pips = inputs["tp pips"]
+    orders = inputs["num_orders"]
+    spacing_pips = inputs["spacing_pips"]
+
+    if not isinstance(spacing_pips, (int, float)):
+            spacing_pips = 10 #tp_pips / orders
+            logging.info(f"Using spacing: {spacing_pips}")
+            
+    lot_size = 0.01
+    dir_multiplier = 1 if direction == "buy" else -1
+
+    # Only need to track this, for following orders
+    opp_direction = "sell" if direction == "buy" else "buy"
+    opp_entry = initial_entry - inputs["spread"] * dir_multiplier
+    activation_request = make_request(
+        symbol=bot.symbol,
+        order_type=f"{opp_direction} limit",
+        start_price=opp_entry,
+        volume_per_order=lot_size,
+        stop_loss_pips=sl_pips,
+        take_profit_pips=tp_pips,
+        comment=comment,
+    )
+    requests.append(activation_request)
+    # positions.insert(0, pending_order)
+
+    for i in range(orders):
+        lots = lot_size
+        if i in [2, 5, 9]:
+            lots = lot_size * 2
+
+        if i == (orders - 1):
+            lot_list = [0.01, 0.01, 0.02, 0.01, 0.01, 0.02, 0.01, 0.01, 0.01, 0.02]
+            final_lot = sum(lot_list[orders - 1:])
+            lots = final_lot
+
+        entry = initial_entry + (i * spacing_pips * dir_multiplier)
+        tp = tp_pips - (i * spacing_pips)
+        sl = sl_pips
+    
+        req = make_request(
+            symbol=bot.symbol,
+            order_type=f"{direction} stop",
+            start_price=entry,
+            volume_per_order=lots,
+            stop_loss_pips=sl,
+            take_profit_pips=tp,
+            comment=comment,
+        )
+        requests.append(req)
+
+    # TODO: Use dict instead
+    # for req in requests:
+    #     print(req)
+    # raise ValueError()
+    positions = place_bulk_orders(requests)
+    positions.extend([opp_direction, dir_multiplier])
+    return positions
     
 def doublebanger_orders(bot, inputs, direction, comment=None, autocomplete=False):
     positions = []
@@ -311,14 +455,14 @@ def doublebanger(bot, inputs, comment=None, confirm=True, autocomplete=False):
             if input('Type "BUY" to continue: ') != "BUY":
                 bot.logger.error("Aborting operation")
                 return
-        positions =  doublebanger_orders(bot, inputs, "buy", comment, autocomplete)
+        positions =  make_doublebanger_orders(bot, inputs, "buy", comment, autocomplete)
     elif inputs["entry"] < symbol_ticks.bid:
         bot.logger.info("Entry is below market price")
         if confirm:
             if input('Type "SELL" to continue: ') != "SELL":
                 bot.logger.error("Aborting operation")
                 return
-        positions = doublebanger_orders(bot, inputs, "sell", comment, autocomplete)
+        positions = make_doublebanger_orders(bot, inputs, "sell", comment, autocomplete)
     else:
         raise ValueError("Price likely between ask and bid")
 
@@ -525,3 +669,36 @@ def save_new_deal(symbol, deal):
     write_db(query, args, message)
 
 # print(get_deals(665015112))
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+import time
+
+mt5_lock = threading.Lock()
+
+def send_single_order(request: dict):
+    # with mt5_lock:
+    result = mt5.order_send(request)
+    if result is None:
+        logging.error(f"Terminal Eror, error={mt5.last_error()}")
+        print(request["price"])
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        logging.error(f"Order failed, retcode={result.retcode}, error={mt5.last_error()}")
+    else:
+        logging.info(f"Order placed successfully for {request['symbol']} at {request['price']}")
+    return result.order
+
+# executor.submit(order, order_type, start_price, spacing_pips, num_orders, volume_per_order, stop_loss_pips=None, take_profit_pips=None, symbol="GER40", comment=None)
+def place_bulk_orders(order_list: list):
+
+    with ThreadPoolExecutor(max_workers=len(order_list)) as executor:
+        # Map functions to the list of orde requests
+        future_to_order = {executor.submit(send_single_order, req): req for req in order_list}
+        results = []
+        for future in as_completed(future_to_order):
+            try:
+                print(f"Trying {future}...")
+                res = future.result()
+                results.append(res)
+            except Exception as e:
+                print(f"Order generated an exception: {e}")
+    return results
