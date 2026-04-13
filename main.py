@@ -421,9 +421,13 @@ class TradingBot:
         
             
 
+        min_dist = mt5.symbol_info(self.symbol).trade_stops_level
+        digits = mt5.symbol_info(self.symbol).digits
+        min_pips = (min_dist * (10 ** -digits)) + 2
         tick =  mt5.symbol_info_tick(self.symbol)
         day_open = round((tick.ask + tick.bid) / 2, 5)
         breadth = 5 + (tick.ask - tick.bid)/2
+        breadth = breadth if breadth > min_pips else min_pips
 
         positions = {
             "top": {
@@ -436,7 +440,7 @@ class TradingBot:
         # sl_pips = args.slpips
         inputs = {
                 "lot_size":0.01, "sl pips": 100, "tp pips": 100,
-                "spacing_pips": 10, "num_orders": 10
+                "spacing_pips": 10, "num_orders": 7
                 }
         comment = "Day " + args.comment + " "
         
