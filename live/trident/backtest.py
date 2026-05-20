@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 
 warnings.filterwarnings('ignore')
 # ============= USD/LOT ==============================
-SYMBOL="GER40"
+SYMBOL="USA30"
 import MetaTrader5 as mt5
 mt5.initialize()
 info = mt5.symbol_info(SYMBOL)
@@ -203,6 +203,29 @@ class SignalPrecomputer:
         return df["2m_bias"].to_dict()
     
     @staticmethod
+    def get_entries(df):
+        """ 
+        Get candles at times.
+        """
+
+        # df['time'] = pd.to_datetime(df['time'])
+        target1 = datetime.strptime("1:00", "%H:%M").time()
+        target2 = datetime.strptime("4:00", "%H:%M").time()
+        mask1 = df.index.time == target1
+        mask2 = df.index.time == target2
+
+        df["entry"] = 0
+        df.loc[mask1, "entry"] = df.loc[mask1, "open"]
+        df.loc[mask2, "entry"] = df.loc[mask2, "close"]
+
+        
+        
+        # Optional: Fill the very first row which becomes NaN after shift
+        # df["2m_bias"] = df["2m_bias"].fillna("straddle")
+        
+        return df#["entry"].to_dict()
+    
+    @staticmethod
     def get_trend(df, buy_t, sell_t, lookback=4, threshold=50):
         
         df['trend'] = 'straddle'
@@ -322,7 +345,8 @@ def process_chunk_parallel(year, month, config):
     # 1. Precompute Signals (Vectorized)
     biases = SignalPrecomputer.get_bias(df, config['bias_filter']['buy_threshold'], config['bias_filter']['sell_threshold'])
     trend = SignalPrecomputer.get_trend(df, config['bias_filter']['buy_threshold'], config['bias_filter']['sell_threshold'])
-    # biases.to_csv("biases.csv")
+    entries = SignalPrecomputer.get_entries(df)
+    # entries.to_csv("entries.csv")
     # return []
 
     # ===================================
@@ -837,7 +861,7 @@ def run_pro_optimization():
 
 if __name__ == "__main__":
     # Choose your path:
-    choice = input("Enter 'B' for Backtest or 'O' for Optimize: ").upper()
+    choice = 1#input("Enter 'B' for Backtest or 'O' for Optimize: ").upper()
     
     if choice == 'O':
         res, best_params = run_pro_optimization()
@@ -858,7 +882,7 @@ if __name__ == "__main__":
     else:
         engine = DAXTickEngine(PRO_SETUP)
         # Example: Run for 2025
-        results = engine.run_backtest(2025, 1, 2026, 3)
+        results = engine.run_backtest(2026, 3, 2026, 3)
         
         if not results.empty:
             results = calculate_equity(results)

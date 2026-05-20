@@ -13,7 +13,7 @@ import pytz
 
 warnings.filterwarnings("ignore")
 # ============= USD/LOT ==============================
-SYMBOL = "GER40"
+SYMBOL = "USA100"
 import MetaTrader5 as mt5
 
 mt5.initialize()
@@ -149,7 +149,7 @@ PRO_SETUP = {
         "lookback_seconds": "3600S",
     },
     "risk_management": {
-        "initial_sl_pips": [np.int64(50), np.int64(50)],
+        "initial_sl_pips": [np.int64(50) * 0.75, np.int64(50)],
         "trailing_stages": [
             {"min_profit": 0, "max_profit": np.int64(30), "retention": -1},
             {"min_profit": np.int64(30), "max_profit": np.int64(60), "retention": 0.9},
@@ -208,8 +208,8 @@ PRO_SETUP = {
 PRO_SETUP = {
     "bias_filter": {"enabled": True, "buy_threshold": 0.6, "sell_threshold": 0.4},
     "entry_conditions": {
-        "buffer_pips": np.int64(20),
-        "velocity_multiplier": 2,
+        "buffer_pips": np.int64(7),
+        "velocity_multiplier": 2.5,
         "lookback_seconds": "3600S",
     },
     "risk_management": {
@@ -282,64 +282,39 @@ PRO_SETUP = {
     },
 }
 
+# PRO_SETUP = {'bias_filter': {'enabled': True, 'buy_threshold': 0.860110398149475, 'sell_threshold': 0.1}, 'entry_conditions': {'buffer_pips': np.int64(7), 'velocity_multiplier': 2.2, 'lookback_seconds': '4694S'}, 'risk_management': {'initial_sl_pips': [np.int64(461), np.int64(461)], 'trailing_stages': [{'min_profit': 0, 'max_profit': np.int64(30), 'retention': -1}, {'min_profit': np.int64(30), 'max_profit': np.int64(60), 'retention': 0.65}, {'min_profit': np.int64(60), 'max_profit': np.int64(90), 'retention': 0.71}, {'min_profit': np.int64(90), 'max_profit': np.int64(120), 'retention': 0.77}, {'min_profit': np.int64(120), 'max_profit': np.int64(150), 'retention': 0.83}, {'min_profit': np.int64(150), 'retention': 0.95}], 'tp_override': {'fast_threshold': np.int64(29), 'slow_threshold': np.int64(138)}}, 'session_constraints': {'day_open': '09:00', 'entry_start': '07:00', 'mandatory_close': '16:30', 'ghost_open': '07:00', 'ghost_close': '07:30'}}
+# PRO_SETUP = {'bias_filter': {'enabled': True, 'buy_threshold': 0.7, 'sell_threshold': 0.3}, 'entry_conditions': {'buffer_pips': np.int64(10), 'velocity_multiplier': 2, 'lookback_seconds': '3600S'}, 'risk_management': {'initial_sl_pips': [np.int64(50), np.int64(50)], 'trailing_stages': [{'min_profit': 0, 'max_profit': np.int64(46), 'retention': -1}, {'min_profit': np.int64(46), 'max_profit': np.int64(92), 'retention': 0.45}, {'min_profit': np.int64(92), 'max_profit': np.int64(138), 'retention': 0.54}, {'min_profit': np.int64(138), 'max_profit': np.int64(184), 'retention': 0.63}, {'min_profit': np.int64(184), 'max_profit': np.int64(230), 'retention': 0.72}, {'min_profit': np.int64(230), 'retention': 0.95}], 'tp_override': {'fast_threshold': np.int64(25), 'slow_threshold': np.int64(279)}}, 'session_constraints': {'day_open': '03:00', 'entry_start': '07:35', 'mandatory_close': '19:00', 'ghost_open': '07:04', 'ghost_close': '07:22'}}
+
 PRO_SETUP = {
-    "bias_filter": {"enabled": True, "buy_threshold": 0.6, "sell_threshold": 0.5},
+    "bias_filter": {
+        "enabled": True,
+        "buy_threshold": 0.6368957463292771,
+        "sell_threshold": 0.32217086452287763,
+    },
     "entry_conditions": {
-        "buffer_pips": np.int64(20),
-        "velocity_multiplier": 1.8,
+        "buffer_pips": 6,
+        "velocity_multiplier": 1.8869154175815386,
         "lookback_seconds": "3600S",
         "price_change_threshold": 50,
-        "tick_loockback": 500,
+        "tick_loockback": 340,
     },
     "risk_management": {
-        "initial_sl_pips": [np.int64(50), np.int64(50)],
+        "initial_sl_pips": [100, 100],
         "trailing_stages": [
-            {"min_profit": 0, "max_profit": np.int64(30), "retention": -1},
-            {"min_profit": np.int64(30), "max_profit": np.int64(50), "retention": 0.6},
-            {"min_profit": np.int64(50), "max_profit": np.int64(60), "retention": 0.65},
-            {"min_profit": np.int64(60), "max_profit": np.int64(90), "retention": 0.7},
-            {"min_profit": np.int64(90), "max_profit": np.int64(120), "retention": 0.8},
-            {
-                "min_profit": np.int64(120),
-                "max_profit": np.int64(150),
-                "retention": 0.9,
-            },
-            {"min_profit": np.int64(150), "retention": 0.95},
+            {"min_profit": 0, "max_profit": 29, "retention": -1},
+            {"min_profit": 29, "retention": 0.95},
         ],
     },
-    # Use London times instead of CAT
     "session_constraints": {
-        "day_open": "9:00",
-        "entry_start": "10:00",
-        "mandatory_close": "17:00",
-        "ghost_open": "8:00",
-        "ghost_close": "8:45",
+        "day_open": "16:30",
+        "entry_start": "17:00",
+        "mandatory_close": "22:30",
+        "ghost_open": "16:07",
+        "ghost_close": "16:15",
     },
 }
 
-
-# PRO_SETUP = {'bias_filter': {'enabled': True, 'buy_threshold': 0.7, 'sell_threshold': 0.3}, 'entry_conditions': {'buffer_pips': np.int64(10), 'velocity_multiplier': 2, 'lookback_seconds': '3600S'}, 'risk_management': {'initial_sl_pips': [np.int64(50), np.int64(50)], 'trailing_stages': [{'min_profit': 0, 'max_profit': np.int64(46), 'retention': -1}, {'min_profit': np.int64(46), 'max_profit': np.int64(92), 'retention': 0.45}, {'min_profit': np.int64(92), 'max_profit': np.int64(138), 'retention': 0.54}, {'min_profit': np.int64(138), 'max_profit': np.int64(184), 'retention': 0.63}, {'min_profit': np.int64(184), 'max_profit': np.int64(230), 'retention': 0.72}, {'min_profit': np.int64(230), 'retention': 0.95}], 'tp_override': {'fast_threshold': np.int64(25), 'slow_threshold': np.int64(279)}}, 'session_constraints': {'day_open': '03:00', 'entry_start': '07:35', 'mandatory_close': '19:00', 'ghost_open': '07:04', 'ghost_close': '07:22'}}
-
-# PRO_SETUP = {
-#     # GER40
-#     'bias_filter': {'enabled': True, 'buy_threshold': 0.75, 'sell_threshold': 0.25},
-#     'entry_conditions': {'buffer_pips': np.int64(5), 'velocity_multiplier': 2.2, 'lookback_seconds': '60min'},
-#     'risk_management': {
-#         'initial_sl_pips': [np.int64(50), np.int64(50)],
-#         'trailing_stages': [
-#             {'min_profit': 0, 'max_profit': np.int64(30), 'retention': -1},
-#             {'min_profit': np.int64(30), 'max_profit': np.int64(60), 'retention': 0.55},
-#             {'min_profit': np.int64(60), 'max_profit': np.int64(90), 'retention': 0.6},
-#             {'min_profit': np.int64(90), 'max_profit': np.int64(120), 'retention': 0.65},
-#             {'min_profit': np.int64(120), 'max_profit': np.int64(150), 'retention': 0.7},
-#             {'min_profit': np.int64(150), 'retention': 0.95}
-#             ],
-#         'tp_override': {'fast_threshold': np.int64(15), 'slow_threshold': np.int64(120)}},
-#         'session_constraints': {
-#             'day_open': '09:00', 'entry_start': '10:00', 'mandatory_close': '16:41',
-#             'ghost_open': '08:00', 'ghost_close': '08:15',
-#             }
-#         }
+PRO_SETUP = {'bias_filter': {'enabled': True, 'buy_threshold': 0.6635904557947964, 'sell_threshold': 0.3388939610722274}, 'entry_conditions': {'buffer_pips': 5, 'velocity_multiplier': 2.013254809911157, 'lookback_seconds': '3600S', 'price_change_threshold': 50, 'tick_loockback': 320}, 'risk_management': {'initial_sl_pips': [55, 55], 'trailing_stages': [{'min_profit': 0, 'max_profit': 46, 'retention': -1}, {'min_profit': 46, 'max_profit': 92, 'retention': 0.77}, {'min_profit': 92, 'retention': 0.95}]}, 'session_constraints': {'day_open': '15:30', 'entry_start': '16:28', 'mandatory_close': '21:58', 'ghost_open': '15:25', 'ghost_close': '15:34'}}
 
 CET = pytz.timezone("Europe/Berlin")
 UTC = pytz.utc
@@ -608,15 +583,31 @@ def process_chunk_parallel(year, month, config):
         # New Day Reset
         if curr_date == day_traded:
             continue
+        
+        if daily_opens.get(curr_date, None) is None:
+            day_traded = curr_date
+            continue
 
         # Session Constraints
         h, m = hours[i], minutes[i]
-        is_entry_window = (
-            (h == start_h and m >= start_m)
-            or (start_h < h < end_h)
-            or (h == end_h and m < end_m)
+        
+        current = h * 60 + m
+        start = start_h * 60 + start_m
+        end = end_h * 60 + end_m
+        
+        if start < end:
+            # Same-day session
+            is_entry_window = start <= current < end
+        else:
+            # Overnight session
+            is_entry_window = current >= start or current < end
+        
+        # Close condition (consistent with window definition)
+        is_close_time = (
+            (start < end and current >= end) or
+            (start > end and current >= end and current < start)
         )
-        is_close_time = h == end_h and m >= end_m
+        
         is_spread_wide = (h == 8 and m < 5) or (h == 17 and m > 25)
 
         bias_str = biases.get(curr_date, "straddle")
@@ -667,16 +658,17 @@ def process_chunk_parallel(year, month, config):
 
             # Dynamic Retention
             retention = 0.6  # default
+            multiplier = 1
             for s in stages:
-                if max_pnl >= s["min_profit"]:
-                    if "max_profit" not in s or max_pnl <= s["max_profit"]:
+                if max_pnl >= s["min_profit"] * multiplier:
+                    if "max_profit" not in s or max_pnl <= s["max_profit"] * multiplier:
                         retention = s["retention"]
 
             if retention == -1:
                 stop_level = (
-                    (entry_p - (sl_initial / contract_size))
+                    (entry_p - (sl_initial * multiplier / contract_size))
                     if direction == "buy"
-                    else (entry_p + (sl_initial / contract_size))
+                    else (entry_p + (sl_initial * multiplier / contract_size))
                 )
                 if direction == "buy":
                     stop_level -= spread
@@ -726,8 +718,8 @@ def process_chunk_parallel(year, month, config):
 
         # ENTRY LOGIC
         elif is_entry_window and not is_spread_wide:
-            n = 50
-            sum_threshold = 5
+            n = config['entry_conditions']['tick_loockback']
+            sum_threshold = config['entry_conditions']['price_change_threshold']
             n_ticks = mids[i - n + 1 : i + 1]
             n_ticks = n_ticks - n_ticks[0]
             if bias_str == "buy":
@@ -790,18 +782,13 @@ def get_lot(equity):
         0: 0.04,  # 1.4
         15: 0.05,  # 2.8
         20: 0.07,  # 4.2
-        30: 0.10,  # 7
-        50: 0.17,  # 14
-        100: 0.33,  # 28
-        150: 0.5,
-        200: 0.67,  # 70
-        300: 1,
-        500: 1.67,  # 105
-        1000: 3.33,  # 28
-        1500: 5,
-        2000: 6.67,  # 70
-        3000: 10,
-        5000: 16.67,
+        30: 0.11,  # 7
+        50: 0.18,  # 14
+        100: 0.36,  # 28
+        200: 0.71,  # 70
+        500: 1.79,  # 105
+        1000: 3.57,
+        5000: 17.86,
     }
 
     for lot in lot_maps:
@@ -814,7 +801,7 @@ def get_lot(equity):
 
 def calculate_equity(trades):
     # Starting balance
-    current_equity = 10.0
+    current_equity = 60.0
 
     # 1. Create columns if they don't exist
     trades["pnl"] = 0.0
@@ -1121,7 +1108,7 @@ def run_pro_optimization():
 
 if __name__ == "__main__":
     # Choose your path:
-    choice = 1 #input("Enter 'B' for Backtest or 'O' for Optimize: ").upper()
+    choice = 1# input("Enter 'B' for Backtest or 'O' for Optimize: ").upper()
 
     if choice == "O":
         res, best_params = run_pro_optimization()
@@ -1142,7 +1129,7 @@ if __name__ == "__main__":
     else:
         engine = DAXTickEngine(PRO_SETUP)
         # Example: Run for 2025
-        results = engine.run_backtest(2026, 1, 2026, 4)
+        results = engine.run_backtest(2025, 1, 2025, 3)
 
         if not results.empty:
             results = calculate_equity(results)
@@ -1152,7 +1139,7 @@ if __name__ == "__main__":
                 get_server_timezone()
             )
             results["server_entry_time"] = entry_time.dt.tz_convert(CET)
-            results.to_csv("DAX_test.csv")
+            results.to_csv(f"{SYMBOL}_test.csv")
             win_rate = (results["profit_ticks"] > 0).mean() * 100
 
             print(f"Backtest Complete.")

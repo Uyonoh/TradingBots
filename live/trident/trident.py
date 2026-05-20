@@ -8,7 +8,7 @@ import time
 # import pandas as pd
 from dotenv import load_dotenv
 
-from live.positions_manager import main as launch_pos_manager
+from positions_manager import main as launch_pos_manager
 from orders import (
     doublebanger,
     get_open_positions,
@@ -457,12 +457,12 @@ class TradingBot:
                 order_filled = True
                 launch_pos_manager([self.symbol, "--max-tp", str(tp_pips)])
 
-    def daily_banger(self, args, **kwargs):
-        rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_D1, 0, 1)
-        day_open = rates[0]["open"]
-        rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_H1, 1, 1)
-        day_open = rates[0]["close"]  # H1 open = last close
-        # Use current price and offset
+    def daily_banger(self, args, entries:list[float], **kwargs):
+        # rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M15, 0, 1)
+        # day_open = rates[0]["open"]
+        # rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M15, 1, 1)
+        # day_open = rates[0]["close"]  # H1 open = last close
+        # # Use current price and offset
 
         if args.time:
             try:
@@ -506,32 +506,32 @@ class TradingBot:
         # min_dist = mt5.symbol_info(self.symbol).trade_stops_level
         # digits = mt5.symbol_info(self.symbol).digits
         # min_pips = (min_dist * (10 ** -digits)) + 2
-        tick = mt5.symbol_info_tick(self.symbol)
-        day_open = round((tick.ask + tick.bid) / 2, 5)
-        breadth = (
-            max(20, self.symbol_info.spread * (10**-self.symbol_info.digits))
-            + (tick.ask - tick.bid) / 2
-        )
-        # breadth if breadth > min_pips else min_pips
+        # tick = mt5.symbol_info_tick(self.symbol)
+        # day_open = round((tick.ask + tick.bid) / 2, 5)
+        # breadth = (
+        #     max(5, self.symbol_info.spread * (10**-self.symbol_info.digits))
+        #     + (tick.ask - tick.bid) / 2
+        # )
+        # # breadth if breadth > min_pips else min_pips
 
         positions = {
             "top": {
                 "entry": normalize_price(
-                    day_open + breadth, self.symbol_info, is_entry=True
+                    entries[0], self.symbol_info, is_entry=True
                 ),
             },
             "bottom": {
                 "entry": normalize_price(
-                    day_open - breadth, self.symbol_info, is_entry=True
+                    entries[1], self.symbol_info, is_entry=True
                 ),
             },
         }
         # sl_pips = args.slpips
         inputs = {
             "lot_size": 0.01,
-            "sl pips": 100*10,
-            "tp pips": 100*10,
-            "spacing_pips": 10*10,
+            "sl pips": 70,
+            "tp pips": 70,
+            "spacing_pips": 10,
             "num_orders": 6,
         }
 
@@ -572,11 +572,8 @@ class TradingBot:
 
         doubled_pos = [2, 5, 9]
 
-        logged_t = None
         while not (top_filled or bottom_filled):
-            if datetime.datetime.now().minute != logged_t:
-                self.logger.info("Waiting for orders to be filled..")
-                logged_t = datetime.datetime.now().minute
+            self.logger.info("Waiting for orders to be filled..")
             time.sleep(0.1)
 
             active_orders = mt5.orders_get(symbol=self.symbol)
@@ -589,8 +586,8 @@ class TradingBot:
                 positions["bottom"]["pending_order"] in active_tickets
             )
 
-            # self.logger.info(f"    {top_still_pending=}")
-            # self.logger.info(f"    {bottom_still_pending=}")
+            self.logger.info(f"    {top_still_pending=}")
+            self.logger.info(f"    {bottom_still_pending=}")
             if not top_still_pending and not top_filled:
                 self.logger.info("Top order filled, making remaining sell orders...")
                 initial_entry = positions["top"]["entry"]
@@ -681,7 +678,6 @@ class TradingBot:
                 bottom_filled = True
         # When one is filed cancel the other
         level = "top" if bottom_filled else "bottom"
-        entry = "top" if bottom_filled else "bottom"
         active_tickets = positions[level]["positions"][:-2]  # last 2 are not pos
         for i, ticket in enumerate(active_tickets):
             request = {
@@ -697,7 +693,7 @@ class TradingBot:
             else:
                 print(f"Canceled order no {i + 1} on {level}: {ticket}")
 
-        launch_pos_manager([self.symbol, "--max-tp", str(tp_pips), "--entry", str(initial_entry)])
+        launch_pos_manager([self.symbol, "--max-tp", str(tp_pips)])
 
     def __del__(self):
         """Ensures the connection is closed when the object is destroyed."""
@@ -711,34 +707,39 @@ class TradingBot:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="automate trades")
-    parser.add_argument("action", help="Market action")
+    # parser.add_argument("action", help="Market action")
     parser.add_argument("symbol", help="Symbol to be traded")
     parser.add_argument(
         "--comment",
         help="Comment for trade deals",
         default=datetime.datetime.now().strftime("%H:%M:%S"),
     )
-    parser.add_argument("--time", help="start time with window of 5mins [hh:mm]")
+    # parser.add_argument("--time", help="start time with window of 5mins [hh:mm]")
     args = parser.parse_args()
 
     bot = TradingBot(args.symbol)
-    dispatch = {
-        "buy": bot.order_buy,
-        "buystop": bot.order_buystop,
-        "buylimit": bot.order_buylimit,
-        "sell": bot.order_sell,
-        "sellstop": bot.order_sellstop,
-        "selllimit": bot.order_sell_limit,
-        "doublebanger": bot.doublebanger,
-        "dailybanger": bot.daily_banger,
-    }
+    # dispatch = {
+    #     "buy": bot.order_buy,
+    #     "buystop": bot.order_buystop,
+    #     "buylimit": bot.order_buylimit,
+    #     "sell": bot.order_sell,
+    #     "sellstop": bot.order_sellstop,
+    #     "selllimit": bot.order_sell_limit,
+    #     "doublebanger": bot.doublebanger,
+    #     "dailybanger": bot.daily_banger,
+    # }
 
-    action = args.action.replace("_", "")
-    if not action in dispatch.keys():
-        # return
-        pass
+    # action = args.action.replace("_", "")
+    # if not action in dispatch.keys():
+    #     # return
+    #     pass
 
-    dispatch[action](args)
+    # dispatch[action](args)
+
+    exec_times = ["2:00", "8:00"]
+
+    # At 2:00, place first db at day 15m open/close
+    # at 8:00, second db at 4:00 close (consider 5:00 open) 15m
 
 
 # TODO: Make individual order functions that call common dep functions

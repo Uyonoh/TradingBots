@@ -23,26 +23,25 @@ info = mt5.symbol_info(SYMBOL)
 # Make diff vel multipliers and lookbacks for the different opens/times
 # SYMBOL = "GER40" #"#BTCUSD"
 contract_size = mt5.symbol_info(SYMBOL).trade_contract_size
-# TODO: Volume checks, trend checks, possibly 30:0.8, 40: 0.5, 50: 0.95
 sl = 50
-r1 = 50
+r1 = 30
 r2 = 50
-
+r3 = 100
 PRO_SETUP = {
     # GER40
-    'bias_filter': {'buy_threshold': 0.7, 'sell_threshold': 0.3, 'buy_limit': 0.85, 'sell_limit': 0.15, 'bias_threshold': 1.5}, 
+    'bias_filter': {'buy_threshold': 0.55, 'sell_threshold': 0.45, 'buy_limit': 0.85, 'sell_limit': 0.15, 'bias_threshold': 1.5}, 
     'entry_conditions': {'buffer_pips': np.int64(5), 'velocity_multiplier': 2.2, 'lookback_seconds': '60min'}, 
     'risk_management': {
         'initial_sl_pips': [sl, np.int64(50)], 
         'trailing_stages': [
-            {'min_profit': 0,   'max_profit': r1,  'retention': -1}, 
-            # {'min_profit': r1,  'max_profit': r2,  'retention': 0.5}, 
-            # {'min_profit': r2,  'max_profit': 50,  'retention': 0.5}, 
+            {'min_profit': 0,   'max_profit': r2,  'retention': -1}, 
+            # {'min_profit': r1,  'max_profit': r2,  'retention': 0.1}, 
+            {'min_profit': r2,  'max_profit': r3,  'retention': 0.8}, 
             #{'min_profit': 60,  'max_profit': 90,  'retention': 0.7}, 
             #{'min_profit': 90,  'max_profit': 120, 'retention': 0.8}, 
             #{'min_profit': 120, 'max_profit': 150, 'retention': 0.9}, 
             #{'min_profit': 150, 'retention': 0.95}
-            {'min_profit': r2, 'retention': 0.95}
+            {'min_profit': r3, 'retention': 1}
             ],
         'tp_override': {'fast_threshold': np.int64(15), 'slow_threshold': np.int64(120)}}, 
         'session_constraints': {
@@ -147,63 +146,14 @@ class SignalPrecomputer:
             (rc <= sell_t)
         ]
         choices = ["buy", "sell"]
-        raw_biases = pd.Series(np.select(conditions, choices, default="straddle"), index=df.index)
+        biases = pd.Series(np.select(conditions, choices, default="straddle"), index=df.index)
 
-        # 3. Apply the "Last 2 same" logic
-        # We look at the current candle (m0) and the previous one (m1)
-        m0 = raw_biases
-        m1 = raw_biases.shift(1)
-
-        p = df['close'] - df['close'].shift(2)
+        biases = biases.shift(1, fill_value="straddle")
         
-        # If m0 and m1 match, use that value; otherwise, "straddle"
-        df ["rc"] = rc
-        df["bias"] = raw_biases
-        min_threshold = 20
-        max_threshold = 110
-        condition = (m0 == m1) & (p.abs() > min_threshold) & (p.abs() < max_threshold)
-        df["2m_bias"] = np.where(condition, m0, "straddle")
-
-        df["2m_bias"] = df["2m_bias"].shift(1, fill_value="straddle")
-        
-        # Optional: Fill the very first row which becomes NaN after shift
-        df["2m_bias"] = df["2m_bias"].fillna("straddle")
-        
-        return df["2m_bias"].to_dict()
+        return biases.to_dict()
     
     @staticmethod
-    def get_bias2(df, buy_t, sell_t):
-        """ 
-        Calculates bias: if last 2 candles have same bias, 
-        that becomes the new bias, else straddle.
-        """
-
-        df['bias'] = 'straddle'
-        df["rc"] = df["close"] - df["open"]
-        df['2m_bias'] = 'straddle'
-        lookback = 2
-        threshold = 10
-        # 1. Pre-calculate the difference once (saves memory and CPU)
-        price_diff = df['close'].shift(1) - df['close'].shift(lookback + 1)
-
-        # 2. Use .between() for the 'buy' logic
-        # inclusive='both' ensures it captures the threshold values exactly
-        buy_mask = price_diff.between(threshold, threshold * 2, inclusive='both')
-        df.loc[buy_mask, '2m_bias'] = 'buy'
-
-        # 3. Use .between() for the 'sell' logic
-        sell_mask = price_diff.between(threshold * -2, -threshold, inclusive='both')
-        df.loc[sell_mask, '2m_bias'] = 'sell'
-
-        # df["2m_bias"] = df["2m_bias"].shift(1, fill_value="straddle")
-        
-        # Optional: Fill the very first row which becomes NaN after shift
-        df["2m_bias"] = df["2m_bias"].fillna("straddle")
-        
-        return df["2m_bias"].to_dict()
-    
-    @staticmethod
-    def get_trend(df, buy_t, sell_t, lookback=4, threshold=50):
+    def get_trend(df, buy_t, sell_t, lookback=10, threshold=20):
         
         df['trend'] = 'straddle'
         df.loc[df['close'].shift(1) - df['close'].shift(lookback + 1) > threshold, 'trend'] = 'buy'
@@ -301,7 +251,7 @@ def process_chunk_parallel(year, month, config):
     # ===================================
     # Handle Candle data
     # ===================================
-    path = Path(f"./tick_data/{SYMBOL}/M15/{SYMBOL}_{year}_{month:02d}.csv")
+    path = Path(f"./tick_data/{SYMBOL}/M5/{SYMBOL}_{year}_{month:02d}.csv")
     if not path.exists(): 
         print(f"File not found: {path}")
         return []
@@ -371,8 +321,8 @@ def process_chunk_parallel(year, month, config):
     in_trade = False
     day_traded = None
     min_traded = None
+    h_traded = -1
     half_sl = False
-    use_trend = False
     
     # Trade State variables
     entry_p = 0.0
@@ -407,11 +357,11 @@ def process_chunk_parallel(year, month, config):
         # New Day Reset
         if curr_date == day_traded:
             daily_pnl = 0.0
-            use_trend = False
+            h_traded = -1
             continue
 
-        if curr_min == min_traded:
-            continue
+        # if curr_min == min_traded:
+        #     continue
 
         # if curr_date.day < 13:
         #     continue
@@ -422,13 +372,13 @@ def process_chunk_parallel(year, month, config):
         # if curr_t.minute < 38 or curr_t.minute > 47:
         #     continue
 
-        if daily_pnl <= -100:
-            # day_traded = curr_date
-            use_trend = True
-        else:
-            use_trend = False
-        # if daily_pnl <= -150:
-        #     day_traded = curr_date
+
+        if curr_t.hour <= h_traded:
+            continue
+        
+
+        if daily_pnl <= -150:
+            day_traded = curr_date
         
 
         # Session Constraints
@@ -439,10 +389,12 @@ def process_chunk_parallel(year, month, config):
         
         bias_str = biases.get(min_idx, 'straddle')
         trend_str = trend.get(min_idx, 'straddle')
-        # print(min_idx)
-        # print(list(biases.keys())[:5])
-        # return []
+
+        if curr_t.minute != 5:
+            bias_str = "straddle"
     
+        if is_close_time:
+            day_traded = curr_date
 
         # EXIT LOGIC
         if in_trade:
@@ -452,7 +404,7 @@ def process_chunk_parallel(year, month, config):
                 pnl *= contract_size # convert change in price to pips
                 trade = {'date': curr_date, 'entry_time': entry_t, 'entry_price': entry_p, 'exit_time': curr_time, ' exit_price': curr_bid if direction == 'buy' else curr_ask,
                 'direction': direction, 'profit_ticks': pnl, 'max_pnl': max_pnl, 'reason': 'Mandatory close', 'current density': curr_den, 'avg density': avg_den}
-                # trades.append(trade)
+                trades.append(trade)
                 
                 # print(trade)
                 # print(df.iloc[[i]])
@@ -462,6 +414,7 @@ def process_chunk_parallel(year, month, config):
                 touched_opposite = False
                 day_traded = curr_date
                 min_traded = curr_min
+                h_traded = curr_t.hour
                 half_sl = False
                 continue
             
@@ -480,10 +433,10 @@ def process_chunk_parallel(year, month, config):
             
             if retention == -1:
                 stop_level = (entry_p - (sl_initial / contract_size)) if direction == 'buy' else (entry_p + (sl_initial / contract_size))
-                if direction == "buy":
-                    stop_level -= spread
-                else:
-                    stop_level += spread
+                # if direction == "buy":
+                #     stop_level -= spread
+                # else:
+                #     stop_level += spread
                 if half_sl:
                     stop_level = (stop_level + (sl_initial / contract_size)/2) if direction == 'buy' else (stop_level - (sl_initial / contract_size)/2)
             else:
@@ -505,6 +458,7 @@ def process_chunk_parallel(year, month, config):
                 daily_pnl += pnl
                 in_trade = False
                 min_traded = curr_min
+                h_traded = curr_t.hour
                 half_sl = False
                 
                 continue
@@ -512,12 +466,11 @@ def process_chunk_parallel(year, month, config):
                 
         # ENTRY LOGIC
         elif is_entry_window and not is_spread_wide:
+            # if trend_str == 'straddle': continue
             if bias_str == 'straddle': continue
-            if use_trend:
-                if trend_str == 'straddle': continue
 
-            if use_trend and bias_str != trend_str:
-                half_sl = True
+            # if bias_str != trend_str:
+            #     half_sl = True
                 # pass
             
             if bias_str == 'buy':
@@ -539,14 +492,14 @@ def process_chunk_parallel(year, month, config):
 def get_lot(equity):
     lot_size = 0.01
     lot_maps = {
-        0: 0.04, # 1.4
-        15: 0.05, # 2.8
-        20: 0.07, # 4.2
-        30: 0.11, # 7
-        50: 0.18, # 14
-        100: 0.36, # 28
-        200: 0.71, # 70
-        500: 1.79, # 105
+        0: 0.01, # 1.4
+        15: 0.02, # 2.8
+        20: 0.03, # 4.2
+        30: 0.4, # 7
+        50: 0.5, # 14
+        100: 0.1, # 28
+        200: 0.2, # 70
+        500: 0.5, # 105
         1000: 3.57,
         5000: 17.86,
     }
@@ -556,7 +509,7 @@ def get_lot(equity):
                 lot_size = lot_maps[lot]
             else:
                 break
-    lot_size /= 2
+    # lot_size /= 4
     return lot_size
     
 def calculate_equity(trades):
@@ -858,7 +811,7 @@ if __name__ == "__main__":
     else:
         engine = DAXTickEngine(PRO_SETUP)
         # Example: Run for 2025
-        results = engine.run_backtest(2025, 1, 2026, 3)
+        results = engine.run_backtest(2025, 5, 2025, 10)
         
         if not results.empty:
             results = calculate_equity(results)
@@ -866,6 +819,8 @@ if __name__ == "__main__":
             # results['server_exit_time'] = results['exit_time'].dt.tz_convert(get_server_timezone())
             entry_time = pd.to_datetime(results['entry_time']).dt.tz_localize(get_server_timezone())
             results['server_entry_time'] = entry_time.dt.tz_convert(CET)
+            res = results.copy()
+            results = results[1:]
             results.to_csv("DAX_test.csv")
             win_rate = (results['profit_ticks'] > 0).mean() * 100
 
@@ -879,7 +834,7 @@ if __name__ == "__main__":
             print(f"Max max_pnl: $ {results['max_pnl'].max()}")
             print(f"Avg max_pnl: $ {results['max_pnl'].mean()}")
             
-            plot_results(results)
+            plot_results(res)
         else:
             print("No results")
 

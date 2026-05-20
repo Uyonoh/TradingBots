@@ -147,7 +147,7 @@ if __name__ == "__main__":
     # downloader = TickDownloader("GER40")
     # downloader.download_ticks()
 
-    loader = DataLoader(symbol='GER40', data_dir='./tick_data', timeframe="H1")
+    loader = DataLoader(symbol='USA30', data_dir='./tick_data', timeframe="M15")
     loader.fetch_and_store_range(
         start_date=datetime(2025,1,1, tzinfo=UTC),
         end_date=datetime(2026,3,31, tzinfo=UTC),

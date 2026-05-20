@@ -29,20 +29,6 @@ SERVER = os.environ["SERVER"]
 MAGIC_NUM += "00"
 MAGIC_NUM = int(MAGIC_NUM)
 
-mt5.initialize()
-positions = mt5.positions_get()
-for pos in positions:
-    if pos.magic >= MAGIC_NUM:
-        print(f"Magic {MAGIC_NUM} exists, incrementing...")
-        MAGIC_NUM = pos.magic + 1
-
-orders = mt5.orders_get()
-for order in orders:
-    if order.magic >= MAGIC_NUM:
-        print(f"Magic {MAGIC_NUM} exists, incrementing...")
-        MAGIC_NUM = order.magic + 1
-
-
 def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, stop_loss_pips=None, take_profit_pips=None, symbol="GER40", comment=None):
     """
     Places a grid of Buy Limit orders.

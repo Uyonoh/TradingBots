@@ -13,8 +13,7 @@ import numpy as np
 import pandas as pd
 import pytz
 
-from orders import normalize_price, order, make_request, send_single_order
-from live.position_tests import Tick, total_profit
+from orders import normalize_price, order
 
 if sys.platform == "linux":
     from mt5linux import MetaTrader5
@@ -57,7 +56,7 @@ CONFIG = {
     },
     "risk_management": {
         "initial_sl_pips": 50,
-        "orders_filled_pips": 50*10,
+        "orders_filled_pips": 50,
         "trailing_stages": [
             # {"min_profit": 0, "max_profit": 60, "retention": -1},
             # # {'min_profit': 50,  'max_profit': 70,  'retention': 0},
@@ -337,7 +336,7 @@ def main(args_list=None):
         "--magic", type=int, default=MAGIC_NUM, help="Unique magic number for bot"
     )
     parser.add_argument(
-        "--entry", type=float, help="Initial entry of orders/stack"
+        "--entry", type=int, help="Initial entry of orders/stack"
     )
     parser.add_argument(
         "--max-tp",
@@ -485,99 +484,37 @@ def main(args_list=None):
                 if states[pos.ticket].max_pnl >= CONFIG["risk_management"]["orders_filled_pips"]:
                     logger.info("Side filled, deleting pending orders...")
                     delete_orders(symbol, magic_num, logger)
-
-                    if args.entry:
-                        # place order at entry +x
-                        # offset = 24.3523
-                        buys = sells = 0
-                        buy_entry = 100**100
-                        sell_entry = 0
-                        for position in my_pos:
-                            if position.type == 0:
-                                buys += 1
-                                buy_entry = min(buy_entry, position.price_open)
-                            else:
-                                sells +=1
-                                sell_entry = max(sell_entry, position.price_open)
-
-                        logger.info(f"BUYS: {buys} --- SELLS: {sells}")
-
-                        # ============================
-                        # ============================
-                        # Calculate total for buy tp
-                        buy_tp = buy_entry + args.max_tp
-                        _tick = Tick((buy_tp), (tick.ask - tick.bid))
-                        buy_pnl = total_profit(buy_entry, sell_entry, buys, sells, _tick, args.max_tp)
-
-                        logger.info(f"Estimated pnl for buys: {buy_pnl}")
-
-                        # Calculate total for sell tp
-                        sell_tp = sell_entry - args.max_tp
-                        _tick = Tick((sell_tp), (tick.ask - tick.bid))
-                        sell_pnl =total_profit(buy_entry, sell_entry, buys, sells, _tick, args.max_tp)
-
-                        logger.info(f"Estimated pnl for sells: {sell_pnl}")
-
-                        # Calculate lot_size
-                        logger.info(f"Buy entry: {buy_entry}")
-                        logger.info(f"Sell Entry: {sell_entry}")
-                        logger.info(f" Buy TP: {buy_tp}")
-                        logger.info(f"Sell TP: {sell_tp}")
-
-                        abs_profit_sum = abs(buy_pnl) + abs(sell_pnl)
-                        price_diff = buy_tp - sell_tp
-                        lot_size = round(abs_profit_sum/price_diff, 2)
-                        lot_size = max(lot_size, 0.01)
-                        
-                        logger.info(f"ABS_SUM: {abs_profit_sum} | PriceDiff: {price_diff}")
-                        logger.info(f"Using lot size = {lot_size}")
-
-                        # Entry
-                        # entry1 = buy_tp  - (abs(buy_pnl)/lot_size)  # 48815.11
-                        # entry2 = sell_tp + (abs(sell_pnl)/lot_size) # 48813.28
-                        # logger.info(f"Entries: {entry1} || {entry2}")
-                        # entry = (entry1+entry2)/2
-
-                        # offset1 = entry - buy_entry
-                        # offset2 = sell_entry - entry
-                        # offset = (offset1 + offset2)/2
-                        # logger.info(f"Offsets: {offset1} || {offset2} ==> {offset}")
-
-
-                        if buys > sells:
-                            opp_direction = "sell"
-                            entry = buy_tp  - (abs(buy_pnl)/lot_size)
-                            offset = entry - buy_entry
-                            # tp = args.max_tp + offset
-                            # sl = args.max_tp - offset
-                        else:
-                            opp_direction = "buy"
-                            entry = sell_tp + (abs(sell_pnl)/lot_size)
-                            offset = sell_entry - entry
-                            # tp = args.max_tp + offset
-                            # sl = args.max_tp - offset
-                        
-                        tp = args.max_tp + offset
-                        sl = args.max_tp - offset
-
-                        logger.info(f"="*50)
-                        logger.info(f"Offset: {offset}")
-                        logger.info(f"Entry: {entry} | TP_PIPS: {tp} | SL_PIPS: {sl}")
-                        logger.info(f"="*50)
-
-                        logger.info(f"Placing {opp_direction} stop foreign order ...")
-                        request = make_request(
-                            symbol=symbol,
-                            order_type=f"{opp_direction} stop",
-                            start_price=entry,
-                            volume_per_order=lot_size,
-                            stop_loss_pips=sl,
-                            take_profit_pips=tp,
-                            symbol_info=symbol_info,
-                            comment="Foreign order",
-                        )
-                        send_single_order(request)
                     orders_deleted = True
+
+                if args.entry:
+                    # place order at entry +x
+                    buys = sells = 0
+                    for position in my_pos:
+                        if position.type == 0:
+                            buys += 1
+                        else:
+                            sells +=1
+                    if buys > sells:
+                        opp_direction = "sell"
+                        tp = args.entry - args.max_tp
+                        sl = args.entry + args.max_tp
+                    else:
+                        opp_direction = "buy"
+                        tp = args.entry - args.max_tp
+                        sl = args.entry + args.max_tp
+
+                    logging.info(f"Placing {opp_direction} stop foreign order ...")
+                    order(
+                        symbol=symbol,
+                        order_type=f"{opp_direction} stop",
+                        start_price=normalize_price(args.entry + 24.3523),
+                        spacing_pips=0,
+                        num_orders=1,
+                        volume_per_order=0.09,
+                        stop_loss_pips=sl,
+                        take_profit_pips=tp,
+                        comment="Foreign order",
+                    )
 
             # Check Stages
             best_retention = 0.0

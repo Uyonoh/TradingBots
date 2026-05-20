@@ -6,11 +6,13 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "backtesting>=0.6.5",
+    "ipykernel>=7.2.0",
     "matplotlib>=3.10.8",
     "MetaTrader5; sys_platform == 'win32'",
     "mt5linux; sys_platform == 'linux'",
     "numpy>=2.4.1",
     "pandas>=2.3.3",
+    "pip>=26.1.1",
     "pyarrow>=23.0.0",
     "pytest>=9.0.2",
     "python-dotenv>=1.2.1",
@@ -18,4 +20,9 @@ dependencies = [
     "scikit-optimize>=0.10.2",
     "seaborn>=0.13.2",
     "tqdm>=4.67.1",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
 ]
