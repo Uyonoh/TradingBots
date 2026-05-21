@@ -140,6 +140,8 @@ class PositionManager:
         self.max_tp = args.max_tp
         self.orders_deleted = False
         self.foreign_ticket = None
+        self.entries = None
+        self.boundaries = None # list of 2 (upper and lower boundaries of trade after shrinking)
         self.foreign_activated = False
         self.foreign_tp_pips = None
         self.positions_shrunk = False
@@ -219,28 +221,41 @@ class PositionManager:
             self.logger.info(f"SL {new_sl} must be  > 0")
             return False
 
-        request = {
-            "action": mt5.TRADE_ACTION_SLTP,
-            "symbol": symbol,
-            "position": position.ticket,
-            "sl": normalize_price(new_sl, self.symbol_info),
-            "tp": normalize_price(new_tp, self.symbol_info),
-            "magic": self.magic_num,
-        }
-        result = mt5.order_send(request)
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            if "No changes" in result.comment:
-                return True
+        # Only modify if new SL is better (Higher for Buy, Lower for Sell)
+        should_mod = False
+        if position.type == mt5.ORDER_TYPE_BUY  and (new_sl >= position.sl) and (new_tp >= position.tp or new_tp == 0):
+            should_mod = True
+        if position.type == mt5.ORDER_TYPE_SELL and (new_sl <= position.sl) and (new_tp <= position.tp or new_tp == 0):
+            should_mod = True
 
-            self.logger.info(f"SL/TP modification Failed [{new_sl} / {new_tp}]: {result.comment}")
-            if "Invalid stops" in result.comment:
-                self.logger.info(f"\tAsk: {self.last_ask}, Bid: {self.last_bid} ")
-                self.logger.info(f"\tAsk Diff: [{abs(new_sl - self.last_ask)}/{abs(new_tp - self.last_ask)}]")
-                self.logger.info(f"\tBid Diff: [{abs(new_sl - self.last_bid)}/{abs(new_tp - self.last_bid)}]")
-                self.logger.info(f"Open Diff: [{abs(new_sl - position.price_open)}/{abs(new_tp - position.price_open)}]")
+        if should_mod:
+            self.logger.info(f"Modifying SL: {position.sl} => {new_sl}")
 
+            request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "symbol": symbol,
+                "position": position.ticket,
+                "sl": normalize_price(new_sl, self.symbol_info),
+                "tp": normalize_price(new_tp, self.symbol_info),
+                "magic": self.magic_num,
+            }
+            result = mt5.order_send(request)
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                if "No changes" in result.comment:
+                    return True
+
+                self.logger.info(f"SL/TP modification Failed [{new_sl} / {new_tp}]: {result.comment}")
+                if "Invalid stops" in result.comment:
+                    self.logger.info(f"\tAsk: {self.last_ask}, Bid: {self.last_bid} ")
+                    self.logger.info(f"\tAsk Diff: [{abs(new_sl - self.last_ask)}/{abs(new_tp - self.last_ask)}]")
+                    self.logger.info(f"\tBid Diff: [{abs(new_sl - self.last_bid)}/{abs(new_tp - self.last_bid)}]")
+                    self.logger.info(f"Open Diff: [{abs(new_sl - position.price_open)}/{abs(new_tp - position.price_open)}]")
+
+                return False
+            # self.logger.info(f"Modified SL: {pos.sl} => {new_sl}")
+            return True
+        else:
             return False
-        return True
 
 
     def remove_tp(self, symbol, position):
@@ -359,36 +374,46 @@ class PositionManager:
         server_time = self.get_server_time(symbol)
         return server_time.astimezone(CET)
 
+    def set_boundaries(self):
+        """ Set position manager boundaries (top, bottom) """
+        # TODO: Take foreign_tp_pips using open max position - entry
+        # Recursive called later so need explicit error handling
+        try:
+            buys = sells = 0
+            buy_entry = 100**100
+            sell_entry = 0
+            for position in self.positions:
+                if self.foreign_ticket:
+                    if position.ticket == self.foreign_ticket:
+                        continue
+                if position.type == mt5.POSITION_TYPE_BUY:
+                    buys += 1
+                    buy_entry = min(buy_entry, position.price_open)
+                else:
+                    sells +=1
+                    sell_entry = max(sell_entry, position.price_open)
+
+            self.logger.info(f"Entries: Buy={buy_entry} | Sell={sell_entry}")
+            p1 = buy_entry + self.foreign_tp_pips
+            p2 = sell_entry - self.foreign_tp_pips
+            self.logger.info(f"boundaries: {p1} | {p2}, FP= {self.foreign_tp_pips}")
+
+            self.boundaries = (p1, p2)
+            self.entries = (buy_entry, sell_entry)
+        except Exception as e:
+            self.logger.error(f"Unexpected error: {e}")
+            raise Exception
+
     def shrink_trades(self):
-
-        # TODO: Need to standardize this to the whole class
-        buys = sells = 0
-        buy_entry = 100**100
-        sell_entry = 0
-        for position in self.positions:
-            if position.ticket == self.foreign_ticket:
-                continue
-            if position.type == mt5.POSITION_TYPE_BUY:
-                buys += 1
-                buy_entry = min(buy_entry, position.price_open)
-            else:
-                sells +=1
-                sell_entry = max(sell_entry, position.price_open)
-
-        self.logger.info(f"Entries: Buy={buy_entry} | Sell={sell_entry}")
-        p1 = buy_entry + self.foreign_tp_pips
-        p2 = sell_entry - self.foreign_tp_pips
-        self.logger.info(f"boundaries: {p1} | {p2}, FP= {self.foreign_tp_pips}")
-
         for pos in self.positions:
             if pos.ticket == self.foreign_ticket:
                 continue
             if pos.type == mt5.POSITION_TYPE_BUY:
-                new_sl = p2
-                new_tp = p1
+                new_sl = self.boundaries[1]
+                new_tp = self.boundaries[0]
             else:
-                new_sl = p1
-                new_tp = p2
+                new_sl = self.boundaries[0]
+                new_tp = self.boundaries[1]
 
             self.logger.info(f"Shrinking {pos.ticket} [{pos.sl} / {pos.tp}] -> [{new_sl} / {new_tp}]")
 
@@ -526,8 +551,21 @@ class PositionManager:
         self.logger.info(f"Estimated pnl for buys: {buy_pnl}")
         self.logger.info(f"Estimated pnl for sells: {sell_pnl}")
 
-        buy_tp = buy_entry + self.foreign_tp_pips
-        sell_tp = sell_entry - self.foreign_tp_pips
+        if self.entries is not None and self.boundaries is not None:
+            if buy_entry != self.entries[0] or sell_entry != self.entries[1]:
+                self.logger.error(f"Entry mismatch: {self.entries} != ({buy_entry}, {sell_entry})")
+            buy_entry = self.entries[0]
+            sell_entry = self.entries[1]
+
+            if buy_entry != self.boundaries[0] or sell_entry != self.boundaries[1]:
+                self.logger.error(f"Boundary mismatch: {self.boundaries} != ({buy_tp}, {sell_tp})")
+            buy_tp = self.boundaries[0]
+            sell_tp = self.boundaries[1]
+        else:
+            self.set_boundaries()
+            return self.make_foreign_request(positions, update)
+
+
 
         abs_profit_sum = abs(buy_pnl) + abs(sell_pnl)
         price_diff = buy_tp - sell_tp
@@ -704,6 +742,9 @@ class PositionManager:
 
         positions = mt5.positions_get(symbol=self.symbol)
         my_pos = [p for p in positions if p.magic == self.magic_num]
+
+        self.positions = my_pos
+        self.set_boundaries()
 
         while True:
             # 1. Hardware Efficiency: Sleep to reduce CPU usage

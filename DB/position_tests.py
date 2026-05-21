@@ -37,7 +37,7 @@ def calculate_loss_excess(direction:str, entry: int|float, SL:int, open_pos:int,
         if p0 < i*spacing:
             idx = i
             break
-    
+
     lots_sum = sum(lots[idx:open_pos])
     weighted_lots_sum = sum([i*l for (i, l) in enumerate(lots[:open_pos])][idx:])
     loss = (p0 * lots_sum) - (spacing * weighted_lots_sum)
@@ -49,7 +49,7 @@ def total_profit(entry_a, entry_b, buy_pos, sell_pos, tick, sl=100, lots=hybid_l
     p2 = calculate_gross_profit("sell", entry_b, sell_pos, tick, lots=lots, spacing=spacing)
     e1 = calculate_loss_excess("buy", entry_b, sl, buy_pos, tick, lots=lots, spacing=spacing)
     e2 = calculate_loss_excess("sell", entry_b, sl, sell_pos, tick, lots=lots, spacing=spacing)
-   
+
     return p1+p2-e1-e2
 
 
@@ -76,14 +76,14 @@ def main():
     # lots = default_lots
 
     spread = 0
-    p_ticks = 100
+    p_ticks = 50
     p_ticks += spread
     tick = Tick(200+p_ticks, spread)
     entry_a = 200
     entry_b = entry_a - spread
-    sl = 100
+    sl = 50
     buy_pos = 6
-    sell_pos = 3
+    sell_pos = 4
     lots = [0.01, 0.01, 0.02, 0.01, 0.01, 0.07]
     # lots = [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.07]
     # lots = [0.01, 0.01, 0.02, 0.01, 0.01, 0.02, 0.01, 0.01, 0.01, 0.02]
