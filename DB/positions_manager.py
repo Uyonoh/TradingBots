@@ -463,13 +463,25 @@ class PositionManager:
             if pos.ticket == self.foreign_ticket:
                 continue
 
-            entry = buy_entry if pos.type == mt5.POSITION_TYPE_BUY else sell_entry
-            if pos.type == position_type:
-                # pnl += (pos.tp - pos.price_open) * pos.volume * multiplier
-                pnl += (-abs(entry - pos.price_open) + self.foreign_tp_pips) * pos.volume * multiplier # Calculate pnl assuming foreign_tp_pips sl and tp
+            # entry = buy_entry if pos.type == mt5.POSITION_TYPE_BUY else sell_entry
+            # if pos.type == position_type:
+            #     # pnl += (pos.tp - pos.price_open) * pos.volume * multiplier
+            #     # pnl += (-abs(entry - pos.price_open) + self.foreign_tp_pips) * pos.volume * multiplier # Calculate pnl assuming foreign_tp_pips sl and tp
+            #     pnl += (entry + self.foreign_tp_pips * multiplier) - pos.price_open) * pos.volume * multiplier # Calculate pnl assuming foreign_tp_pips sl and tp
+            # else:
+            #     # pnl += (pos.price_open - pos.sl) * pos.volume * multiplier
+            #     pnl += (-abs(entry - pos.price_open) - self.foreign_tp_pips) * pos.volume * multiplier # Calculate pnl assuming foreign_tp_pips sl and tp
+
+            if direction.lower() == "buy":
+                if pos.type == mt5.POSITION_TYPE_BUY:
+                    pnl += (self.boundaries[0] - pos.price_open) * pos.volume
+                else:
+                    pnl -= (self.boundaries[0] - pos.price_open) * pos.volume
             else:
-                # pnl += (pos.price_open - pos.sl) * pos.volume * multiplier
-                pnl += (-abs(entry - pos.price_open) - self.foreign_tp_pips) * pos.volume * multiplier # Calculate pnl assuming foreign_tp_pips sl and tp
+                if pos.type == mt5.POSITION_TYPE_SELL:
+                    pnl += (pos.price_open - self.boundaries[1]) * pos.volume
+                else:
+                    pnl -= (pos.price_open - self.boundaries[1]) * pos.volume
 
 
         return round(pnl / self.contract_size, 2)
@@ -478,6 +490,7 @@ class PositionManager:
     def deals(self, buys, buy_entry, buy_pnl, sells, sell_entry, sell_pnl):
         to_date = self.get_server_time(self.symbol) #datetime.now()
         from_date = to_date - timedelta(hours=6)
+        pnl = 0
 
         # buy_pnl = 0 # tp for buy sl for sell
         # sell_pnl = 0 # tp for sell sl for buy
@@ -493,21 +506,22 @@ class PositionManager:
 
             if deal.type == mt5.DEAL_TYPE_BUY:
                 # Buy entry OR Sell hit sl/tp
-                if deal.profit > 0: # TP direction -> cout + sell
-                    sell_pnl += deal.profit
-                    sells += 1
-                elif deal.profit < 0: # SL -> count buy
-                    buy_pnl += deal.profit
-                    buys +=1
-            else:
-                if deal.profit > 0:
-                    buy_pnl += deal.profit
-                    buys += 1
-                elif deal.profit < 0:
-                    sell_pnl += deal.profit
-                    sells += 1
+                # if deal.profit > 0: # TP direction -> cout + sell
+                #     sell_pnl += deal.profit
+                # elif deal.profit < 0: # SL -> count buy
+                #     buy_pnl += deal.profit
+                sells += 1
+                pnl += deal.profit
+            elif deal.type == mt5.DEAL_TYPE_SELL:
+                # if deal.profit > 0:
+                #     buy_pnl += deal.profit
+                # elif deal.profit < 0:
+                #     sell_pnl += deal.profit
+                buys += 1
+                pnl += deal.profit
 
-
+        buy_pnl += pnl
+        sell_pnl += pnl
         return buys, buy_entry, buy_pnl, sells, sell_entry, sell_pnl
 
     def verify_request(self, entry, sl, tp) -> dict:
@@ -557,8 +571,6 @@ class PositionManager:
             buy_entry = self.entries[0]
             sell_entry = self.entries[1]
 
-            if buy_entry != self.boundaries[0] or sell_entry != self.boundaries[1]:
-                self.logger.error(f"Boundary mismatch: {self.boundaries} != ({buy_tp}, {sell_tp})")
             buy_tp = self.boundaries[0]
             sell_tp = self.boundaries[1]
         else:
@@ -575,7 +587,7 @@ class PositionManager:
         self.logger.info(f"Using lot size = {lot_size}")
         tick = mt5.symbol_info_tick(self.symbol)
 
-        if buys > sells:
+        if buy_pnl > sell_pnl:
             opp_direction = "sell"
             entry = buy_tp  - (abs(buy_pnl)/lot_size)
             offset = entry - buy_entry
