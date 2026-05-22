@@ -81,7 +81,8 @@ def retry(
     delay: float = 1.0,
     backoff: float = 2.0,
     exceptions: tuple = (Exception,),
-    logger: Optional[logging.Logger] = None
+    logger: Optional[logging.Logger] = None,
+    logger_attr: str = "logger",
 ):
     """
     Retry decorator with exponential backoff.
@@ -90,17 +91,19 @@ def retry(
         @wraps(func)
         def wrapper(*args, **kwargs):
             current_delay = delay
+            instance = args[0] if args else None
+            resolved_logger = getattr(instance, logger_attr, logger) if instance else logger
             for attempt in range(1, max_attempts + 1):
                 try:
                     return func(*args, **kwargs)
                 except exceptions as e:
                     if attempt == max_attempts:
-                        if logger:
-                            logger.error(f"Operation failed after {max_attempts} attempts: {e}")
+                        if resolved_logger:
+                            resolved_logger.error(f"Operation failed after {max_attempts} attempts: {e}")
                         raise
 
-                    if logger:
-                        logger.warning(f"Attempt {attempt}/{max_attempts} failed: {e}. "
+                    if resolved_logger:
+                        resolved_logger.warning(f"Attempt {attempt}/{max_attempts} failed: {e}. "
                                       f"Retrying in {current_delay:.1f}s...")
 
                     t_mod.sleep(current_delay)
