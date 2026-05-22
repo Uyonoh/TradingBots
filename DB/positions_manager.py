@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pytz
 
+from utils import retry
 from orders import normalize_price, order, make_request, send_single_order
 from position_tests import Tick, total_profit
 
@@ -145,6 +146,7 @@ class PositionManager:
         self.foreign_activated = False
         self.foreign_tp_pips = None
         self.positions_shrunk = False
+        self.trailing = False
         self.last_ask = self.last_bid = None
 
         if not self.logger:
@@ -178,7 +180,7 @@ class PositionManager:
 
 
 
-        self.foreign_tp_pips = self.max_tp / 2
+        self.foreign_tp_pips = (self.max_tp / 2) + (self.stop_levels * 1.5) + 10 # Extra padding
 
         self.logger.info(f"{self.max_tp=}")
         self.logger.info(f"{self.foreign_tp_pips=}")
@@ -211,11 +213,16 @@ class PositionManager:
                 self.logger.info("Mandatory Close Executed")
 
 
-    def modify_sl_tp(self, symbol, position, new_sl=None, new_tp=None):
+    @retry(max_attempts=3, delay=0.5)
+    def modify_sl_tp(self, symbol, position, new_sl=None, new_tp=None, force=False):
+        tp_mod = True
+        sl_mod = True
         if new_sl is None:
             new_sl = position.sl
+            sl_mod = False
         if new_tp is None:
             new_tp = position.tp
+            tp_mod = False
 
         if new_sl <= 0:
             self.logger.info(f"SL {new_sl} must be  > 0")
@@ -223,13 +230,22 @@ class PositionManager:
 
         # Only modify if new SL is better (Higher for Buy, Lower for Sell)
         should_mod = False
-        if position.type == mt5.ORDER_TYPE_BUY  and (new_sl >= position.sl) and (new_tp >= position.tp or new_tp == 0):
+        if position.type == mt5.ORDER_TYPE_BUY  and (new_sl >= position.sl):
             should_mod = True
-        if position.type == mt5.ORDER_TYPE_SELL and (new_sl <= position.sl) and (new_tp <= position.tp or new_tp == 0):
+        if position.type == mt5.ORDER_TYPE_SELL and (new_sl <= position.sl):
+            should_mod = True
+        if force:
             should_mod = True
 
         if should_mod:
-            self.logger.info(f"Modifying SL: {position.sl} => {new_sl}")
+            modified = ""
+            if sl_mod:
+                modified += f"Modifying SL: {position.sl} => {new_sl}"
+            if tp_mod:
+                modified += f" | Modifying TP: {position.tp} => {new_tp}"
+            if not (sl_mod or tp_mod):
+                modified += f"No modifications made to {position.ticket}"
+            self.logger.info(modified)
 
             request = {
                 "action": mt5.TRADE_ACTION_SLTP,
@@ -251,6 +267,7 @@ class PositionManager:
                     self.logger.info(f"\tBid Diff: [{abs(new_sl - self.last_bid)}/{abs(new_tp - self.last_bid)}]")
                     self.logger.info(f"Open Diff: [{abs(new_sl - position.price_open)}/{abs(new_tp - position.price_open)}]")
 
+                raise ValueError(f"SL/TP modification Failed [{new_sl} / {new_tp}]: {result.comment} Code: {result.retcode}")
                 return False
             # self.logger.info(f"Modified SL: {pos.sl} => {new_sl}")
             return True
@@ -271,6 +288,7 @@ class PositionManager:
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             self.logger.info(f"TP modification Failed: {result.comment}")
 
+    @retry(max_attempts=2, delay=0.5)
     def move_tp(self, position, margin=20):
         if position.type == mt5.POSITION_TYPE_BUY:
             tp = position.tp + margin
@@ -290,7 +308,9 @@ class PositionManager:
         result = mt5.order_send(request)
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             self.logger.info(f"TP modification Failed: {result.comment}")
+            raise ValueError(f"TP modification Failed [{position.tp} -> {tp}]: {result.comment}. Code: {result.retcode}")
 
+    @retry(max_attempts=3, delay=0.5)
     def delete_order(self, ticket:int):
         """Delete a single order"""
         request = {
@@ -298,7 +318,10 @@ class PositionManager:
             "order": ticket,
             "comment": "Mandatory Close",
         }
-        mt5.order_send(request)
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            self.logger.info(f"Order delete Failed: {result.comment}")
+            raise ValueError(f"Order delete failed: {result.comment}. Code: {result.retcode}")
         self.logger.info("Pending Order Deleted")
 
     def delete_orders(self, symbol, magic):
@@ -405,21 +428,22 @@ class PositionManager:
             raise Exception
 
     def shrink_trades(self):
+        spread = self.last_ask - self.last_bid
         for pos in self.positions:
             if pos.ticket == self.foreign_ticket:
                 continue
             if pos.type == mt5.POSITION_TYPE_BUY:
                 new_sl = self.boundaries[1]
-                new_tp = self.boundaries[0]
+                new_tp = self.boundaries[0] - spread
             else:
                 new_sl = self.boundaries[0]
-                new_tp = self.boundaries[1]
+                new_tp = self.boundaries[1] + spread
 
             self.logger.info(f"Shrinking {pos.ticket} [{pos.sl} / {pos.tp}] -> [{new_sl} / {new_tp}]")
-
-            self.modify_sl_tp(self.symbol, pos, new_sl=new_sl, new_tp=None)
+            self.modify_sl_tp(self.symbol, pos, new_sl=new_sl, new_tp=None, force=True)
             # Only mods TP as sl is same
-            self.modify_sl_tp(self.symbol, pos, new_sl=new_sl, new_tp=new_tp)
+            self.modify_sl_tp(self.symbol, pos, new_sl=new_sl, new_tp=new_tp, force=True)
+            self.logger.info("DONE")
 
             # Check success
             try:
@@ -457,6 +481,7 @@ class PositionManager:
             pnl /= contract_size
         """
         pnl = 0
+        spread = self.last_ask - self.last_bid
         position_type = mt5.POSITION_TYPE_BUY if direction.lower() == "buy" else mt5.POSITION_TYPE_SELL
         multiplier = 1 if direction.lower() == "buy" else -1
         for pos in positions:
@@ -474,19 +499,20 @@ class PositionManager:
 
             if direction.lower() == "buy":
                 if pos.type == mt5.POSITION_TYPE_BUY:
-                    pnl += (self.boundaries[0] - pos.price_open) * pos.volume
+                    pnl += ((self.boundaries[0] - pos.price_open) / self.contract_size - spread) * pos.volume
                 else:
-                    pnl -= (self.boundaries[0] - pos.price_open) * pos.volume
+                    pnl -= ((self.boundaries[0] - pos.price_open) / self.contract_size) * pos.volume
             else:
                 if pos.type == mt5.POSITION_TYPE_SELL:
-                    pnl += (pos.price_open - self.boundaries[1]) * pos.volume
+                    pnl += ((pos.price_open - self.boundaries[1]) / self.contract_size - spread) * pos.volume
                 else:
-                    pnl -= (pos.price_open - self.boundaries[1]) * pos.volume
+                    pnl -= ((pos.price_open - self.boundaries[1]) / self.contract_size) * pos.volume
 
 
         return round(pnl / self.contract_size, 2)
 
 
+    @retry(max_attempts=3, delay=0.5)
     def deals(self, buys, buy_entry, buy_pnl, sells, sell_entry, sell_pnl):
         to_date = self.get_server_time(self.symbol) #datetime.now()
         from_date = to_date - timedelta(hours=6)
@@ -761,6 +787,10 @@ class PositionManager:
         while True:
             # 1. Hardware Efficiency: Sleep to reduce CPU usage
             t_mod.sleep(0.1)
+            tick = mt5.symbol_info_tick(self.symbol)
+            spread = tick.ask - tick.bid
+            self.last_ask = tick.ask
+            self.last_bid = tick.bid
 
             # 2. Update Time
             now_cet = self.get_server_time_cet(self.symbol)
@@ -777,10 +807,6 @@ class PositionManager:
             self.foreign_order(my_pos)
 
             open_pos = len(my_pos) > 0
-            tick = mt5.symbol_info_tick(self.symbol)
-            spread = tick.ask - tick.bid
-            self.last_ask = tick.ask
-            self.last_bid = tick.bid
 
             for pos in my_pos:
                 if pos.ticket not in self.states:
@@ -822,7 +848,7 @@ class PositionManager:
                     )
                     levels = [
                         s["min_profit"] * self.max_tp / 100
-                        - ((self.max_tp - self.states[pos.ticket].tp_pips / self.contract_size))# if not self.positions_shrunk else 0)
+                        - (((self.max_tp - self.states[pos.ticket].tp_pips) / self.contract_size) if not self.foreign_activated else 0)
                         - spread
                         for s in self.config["risk_management"]["trailing_stages"]
                     ]
@@ -895,7 +921,7 @@ class PositionManager:
 
                             for i in range(MAX_RETRIES):
                                 if not success:
-                                    step = (2) ** i + i + 1
+                                    step = 0#(2) ** i + i + 1
                                     tick = mt5.symbol_info_tick(self.symbol)
                                     price = (
                                         tick.bid
@@ -928,6 +954,32 @@ class PositionManager:
                             else (pos.price_open - trail_dist + self.stop_levels)
                         )
                         new_sl = normalize_price(new_sl, self.symbol_info)
+
+                        if self.foreign_activated:
+                            new_sl = None
+                            if pos.type == mt5.ORDER_TYPE_BUY:
+                                tp_pips = tick.bid - self.entries[0]
+                                trail = tp_pips * 0.95 / self.contract_size
+                                price = max(self.boundaries[0] - self.stop_levels, self.entries[0] + trail) #tick.bid - self.stop_levels
+                                if price > pos.sl:
+                                    if price >= tick.bid - self.stop_levels:
+                                        new_sl = normalize_price(price, self.symbol_info)
+                            else:
+                                tp_pips = self.entries[1] - tick.ask
+                                trail = tp_pips * 0.95 / self.contract_size
+                                price = min(self.boundaries[1] + self.stop_levels, self.entries[1] - trail)
+                                if price < pos.sl:
+                                    if price <= tick.ask + self.stop_levels:
+                                        new_sl = normalize_price(price, self.symbol_info)
+
+                            if dist_to_tp is not None and dist_to_tp <= 20:
+                                if pos.tp != 0.0:
+                                    # self.remove_tp(self.symbol, pos)
+                                    self.move_tp(pos)
+
+                            if new_sl is None:
+                                continue
+
                         # Only modify if new SL is better (Higher for Buy, Lower for Sell)
                         should_mod = False
                         if pos.type == mt5.ORDER_TYPE_BUY and (new_sl > pos.sl):
@@ -943,7 +995,7 @@ class PositionManager:
 
                             for i in range(MAX_RETRIES):
                                 if not success:
-                                    step = (2) ** i + i + 1
+                                    step = (2) ** i
                                     tick = mt5.symbol_info_tick(self.symbol)
                                     price = (
                                         tick.bid
@@ -960,6 +1012,10 @@ class PositionManager:
                                         if pos.type == mt5.ORDER_TYPE_BUY
                                         else (new_sl + step)
                                     )
+                                    if pos.type == mt5.ORDER_TYPE_BUY and not (new_sl > pos.sl):
+                                        continue
+                                    if pos.type == mt5.ORDER_TYPE_SELL and not (new_sl < pos.sl):
+                                        continue
                                     success = self.modify_sl_tp(
                                         self.symbol, pos, new_sl
                                     )

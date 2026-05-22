@@ -285,8 +285,12 @@ class TradingBot:
         order_still_pending = True
         # dir_multiplier = -1 if direction == "buy" else 1
         # initial_entry = initial_entry - (spacing_pips * bot.contract_size * dir_multiplier)
+        logged_m = None
         while order_still_pending:
-            self.logger.info("Waiting for orders to be filled..")
+            now = datetime.datetime.now()
+            if now.minute != logged_m:
+                self.logger.info("Waiting for orders to be filled..")
+                logged_m = now.minute
             time.sleep(0.1)
 
             active_orders = mt5.orders_get(symbol=self.symbol)
@@ -440,6 +444,15 @@ class TradingBot:
                 "spacing_pips": 10 * 5,
                 "num_orders": 8,
             }
+        elif args.target >= 500:
+            inputs = {
+                "lot_size": 0.01,
+                "sl pips": args.target,
+                "tp pips": args.target,
+                "spacing_pips": args.target / 10,
+                "num_orders": 6,
+            }
+
         comment = "Day " + args.comment + " "
 
         self.logger.info(f"Initiating daily banger with inputs: {inputs}")
