@@ -217,7 +217,7 @@ class PositionManager:
                 self.logger.info("Mandatory Close Executed")
 
 
-    @retry(max_attempts=3, delay=0.5)
+    @retry(max_attempts=3, delay=0.1)
     def modify_sl_tp(self, symbol, position, new_sl=None, new_tp=None, force=False):
         tp_mod = True
         sl_mod = True
@@ -295,7 +295,7 @@ class PositionManager:
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             self.logger.info(f"TP modification Failed: {result.comment}")
 
-    @retry(max_attempts=2, delay=0.5)
+    @retry(max_attempts=2, delay=0.1)
     def move_tp(self, position, margin=20):
         if position.type == mt5.POSITION_TYPE_BUY:
             tp = position.tp + margin
@@ -317,7 +317,7 @@ class PositionManager:
             self.logger.info(f"TP modification Failed: {result.comment}")
             raise ValueError(f"TP modification Failed [{position.tp} -> {tp}]: {result.comment}. Code: {result.retcode}")
 
-    @retry(max_attempts=3, delay=0.5)
+    @retry(max_attempts=3, delay=0.1)
     def delete_order(self, ticket:int):
         """Delete a single order"""
         request = {
@@ -823,8 +823,8 @@ class PositionManager:
             price_diff = entry - sell_tp + spread
             offset = sell_entry - entry
             # SL and TP pips
-            sl = (self.boundaries[0] - entry) * contract_size
-            tp = (entry - (self.boundaries[1] + spread)) * contract_size
+            sl = (self.boundaries[0] - entry) * self.contract_size
+            tp = (entry - (self.boundaries[1] + spread)) * self.contract_size
 
 
             lot_size = round((-sell_pnl + self.alien_profit)/price_diff, 2)
@@ -844,8 +844,8 @@ class PositionManager:
             price_diff = buy_tp - spread - entry
             offset = entry - buy_entry
             # SL and TP pips
-            sl = (entry - self.boundaries[1]) * contract_size
-            tp = ((self.boundaries[0] - spread) - entry) * contract_size
+            sl = (entry - self.boundaries[1]) * self.contract_size
+            tp = ((self.boundaries[0] - spread) - entry) * self.contract_size
 
 
             lot_size = round((-buy_pnl + self.alien_profit)/price_diff, 2)
@@ -1201,32 +1201,33 @@ class PositionManager:
                             self.logger.info(f"Modified SL: {pos.sl} => {new_sl}")
                             success = self.modify_sl_tp(self.symbol, pos, new_sl)
 
-                            for i in range(MAX_RETRIES):
-                                if not success:
-                                    step = (2) ** i
-                                    tick = mt5.symbol_info_tick(self.symbol)
-                                    price = (
-                                        tick.bid
-                                        if pos.type == mt5.ORDER_TYPE_BUY
-                                        else tick.ask
-                                    )
-                                    self.logger.info(
-                                        f"    SL mod to [{new_sl}] failed with Price [{price} >> [{tick.ask} / {tick.bid} ]]"
-                                    )
-                                    self.logger.info(f"    Rolling back SL by {step}...")
-                                    self.states[pos.ticket].max_pnl -= step
-                                    new_sl = (
-                                        (new_sl - step)
-                                        if pos.type == mt5.ORDER_TYPE_BUY
-                                        else (new_sl + step)
-                                    )
-                                    if pos.type == mt5.ORDER_TYPE_BUY and not (new_sl > pos.sl):
-                                        continue
-                                    if pos.type == mt5.ORDER_TYPE_SELL and not (new_sl < pos.sl):
-                                        continue
-                                    success = self.modify_sl_tp(
-                                        self.symbol, pos, new_sl
-                                    )
+
+                            # for i in range(MAX_RETRIES):
+                            #     if not success:
+                            #         step = (2) ** i
+                            #         tick = mt5.symbol_info_tick(self.symbol)
+                            #         price = (
+                            #             tick.bid
+                            #             if pos.type == mt5.ORDER_TYPE_BUY
+                            #             else tick.ask
+                            #         )
+                            #         self.logger.info(
+                            #             f"    SL mod to [{new_sl}] failed with Price [{price} >> [{tick.ask} / {tick.bid} ]]"
+                            #         )
+                            #         self.logger.info(f"    Rolling back SL by {step}...")
+                            #         self.states[pos.ticket].max_pnl -= step
+                            #         new_sl = (
+                            #             (new_sl - step)
+                            #             if pos.type == mt5.ORDER_TYPE_BUY
+                            #             else (new_sl + step)
+                            #         )
+                            #         if pos.type == mt5.ORDER_TYPE_BUY and not (new_sl > pos.sl):
+                            #             continue
+                            #         if pos.type == mt5.ORDER_TYPE_SELL and not (new_sl < pos.sl):
+                            #             continue
+                            #         success = self.modify_sl_tp(
+                            #             self.symbol, pos, new_sl
+                            #         )
 
                             if dist_to_tp is not None and dist_to_tp <= 20:
                                 if pos.tp != 0.0:
