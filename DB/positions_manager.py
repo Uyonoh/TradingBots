@@ -178,17 +178,41 @@ class PositionManager:
         self.logger.info(f"Postion Manager Started on {self.symbol}...")
 
         self.stop_levels = self.symbol_info.trade_stops_level * (10**-self.symbol_info.digits)
+        self.spread = self.symbol_info.spread * (10**-self.symbol_info.digits)
 
         self.states = {}
         self.config = DEFAULT_CONFIG
 
 
 
-        self.foreign_tp_pips = (self.max_tp / 2) + (self.stop_levels * 1.5) + 10 # Extra padding
+        self.foreign_tp_pips = (self.max_tp / 2) + (max(self.stop_levels * 2, self.spread)) # Extra padding
 
         self.logger.info(f"{self.max_tp=}")
         self.logger.info(f"{self.foreign_tp_pips=}")
 
+
+    @retry(max_attempts=3, delay=0.1)
+    def close_position(self, position):
+        tick = mt5.symbol_info_tick(self.symbol)
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": self.symbol,
+            "volume": position.volume,
+            "type": mt5.ORDER_TYPE_SELL
+            if position.type == mt5.ORDER_TYPE_BUY
+            else mt5.ORDER_TYPE_BUY,
+            "position": position.ticket,
+            "price": tick.bid
+            if position.type == mt5.ORDER_TYPE_BUY
+            else tick.ask,  # Error: Might need to add padding
+            "deviation": DEVIATION,
+            "magic": self.magic_num,
+            "comment": "Mandatory Close",
+        }
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            self.logger.error(f"Failed to close position {position.ticket}")
+        self.logger.info("Mandatory Close Executed")
 
     def close_positions(self, symbol, magic):
         """Closes all positions with our Magic Number"""
@@ -197,24 +221,7 @@ class PositionManager:
             return
         for pos in positions:
             if pos.magic == magic:
-                tick = mt5.symbol_info_tick(symbol)
-                request = {
-                    "action": mt5.TRADE_ACTION_DEAL,
-                    "symbol": symbol,
-                    "volume": pos.volume,
-                    "type": mt5.ORDER_TYPE_SELL
-                    if pos.type == mt5.ORDER_TYPE_BUY
-                    else mt5.ORDER_TYPE_BUY,
-                    "position": pos.ticket,
-                    "price": tick.bid
-                    if pos.type == mt5.ORDER_TYPE_BUY
-                    else tick.ask,  # Error: Might need to add padding
-                    "deviation": DEVIATION,
-                    "magic": self.magic_num,
-                    "comment": "Mandatory Close",
-                }
-                mt5.order_send(request)
-                self.logger.info("Mandatory Close Executed")
+                self.close_position(pos)
 
 
     @retry(max_attempts=3, delay=0.1)
@@ -1198,9 +1205,13 @@ class PositionManager:
                             should_mod = True
 
                         if should_mod:
-                            self.logger.info(f"Modified SL: {pos.sl} => {new_sl}")
                             success = self.modify_sl_tp(self.symbol, pos, new_sl)
 
+                            if not success:
+                                self.logger.error(f"Failed to modify {pos.ticket}")
+                                self.close_position(pos)
+                            else:
+                                self.logger.info(f"Modified SL: {pos.sl} => {new_sl}")
 
                             # for i in range(MAX_RETRIES):
                             #     if not success:
