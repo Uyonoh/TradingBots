@@ -144,10 +144,14 @@ class PositionManager:
         self.entries = None
         self.boundaries = None # list of 2 (upper and lower boundaries of trade after shrinking)
         self.foreign_activated = False
+        self.alien_activated = False
         self.foreign_tp_pips = None
         self.positions_shrunk = False
         self.trailing = False
         self.last_ask = self.last_bid = None
+
+        self.alien_profit = 7
+        self.alien_order_no = 0
 
         if not self.logger:
             self.logger = logging.getLogger("trading.position_manager")
@@ -260,11 +264,14 @@ class PositionManager:
                 if "No changes" in result.comment:
                     return True
 
+                tick = mt5.symbol_info_tick(self.symbol)
+                self.last_ask = tick.ask
+                self.last_bid = tick.bid
                 self.logger.info(f"SL/TP modification Failed [{new_sl} / {new_tp}]: {result.comment}")
                 if "Invalid stops" in result.comment:
-                    self.logger.info(f"\tAsk: {self.last_ask}, Bid: {self.last_bid} ")
-                    self.logger.info(f"\tAsk Diff: [{abs(new_sl - self.last_ask)}/{abs(new_tp - self.last_ask)}]")
-                    self.logger.info(f"\tBid Diff: [{abs(new_sl - self.last_bid)}/{abs(new_tp - self.last_bid)}]")
+                    self.logger.info(f"\t Ask: {self.last_ask}, Bid: {self.last_bid} ")
+                    self.logger.info(f"\t Ask Diff: [{abs(new_sl - self.last_ask)}/{abs(new_tp - self.last_ask)}]")
+                    self.logger.info(f"\t Bid Diff: [{abs(new_sl - self.last_bid)}/{abs(new_tp - self.last_bid)}]")
                     self.logger.info(f"Open Diff: [{abs(new_sl - position.price_open)}/{abs(new_tp - position.price_open)}]")
 
                 raise ValueError(f"SL/TP modification Failed [{new_sl} / {new_tp}]: {result.comment} Code: {result.retcode}")
@@ -320,8 +327,8 @@ class PositionManager:
         }
         result = mt5.order_send(request)
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            self.logger.info(f"Order delete Failed: {result.comment}")
-            raise ValueError(f"Order delete failed: {result.comment}. Code: {result.retcode}")
+            self.logger.info(f"Order delete Failed for {ticket}: {result.comment}")
+            raise ValueError(f"Order delete failed for {ticket}: {result.comment}. Code: {result.retcode}")
         self.logger.info("Pending Order Deleted")
 
     def delete_orders(self, symbol, magic):
@@ -417,6 +424,8 @@ class PositionManager:
                     sell_entry = max(sell_entry, position.price_open)
 
             self.logger.info(f"Entries: Buy={buy_entry} | Sell={sell_entry}")
+            # tick = mt5.symbol_info_tick(self.symbol)
+            # spread = tick.ask - tick.bid
             p1 = buy_entry + self.foreign_tp_pips
             p2 = sell_entry - self.foreign_tp_pips
             self.logger.info(f"boundaries: {p1} | {p2}, FP= {self.foreign_tp_pips}")
@@ -430,7 +439,7 @@ class PositionManager:
     def shrink_trades(self):
         spread = self.last_ask - self.last_bid
         for pos in self.positions:
-            if pos.ticket == self.foreign_ticket:
+            if pos.ticket == self.foreign_ticket or pos.ticket == self.alien_ticket:
                 continue
             if pos.type == mt5.POSITION_TYPE_BUY:
                 new_sl = self.boundaries[1]
@@ -468,17 +477,6 @@ class PositionManager:
 
     def calc_pnl(self, positions:list, direction:str, buy_entry:float, sell_entry:float) -> float:
         """
-        group pos by order type
-            buy_pnl: -> for pos:
-                pnl += (pos.tp - pos.price_open) * pos.volume if buy
-                pnl += (pos.price_open - pos.sl)  * pos.volume (negative val) if sell
-            sell_onl:
-                pnl += (pos.po - pos.tp) ( vol ) if sell
-                pnl += (pos.sl - pos.po) * vol
-
-            for deal in history_deals_get(from_date, to_date, group=sym):
-
-            pnl /= contract_size
         """
         pnl = 0
         spread = self.last_ask - self.last_bid
@@ -499,17 +497,17 @@ class PositionManager:
 
             if direction.lower() == "buy":
                 if pos.type == mt5.POSITION_TYPE_BUY:
-                    pnl += ((self.boundaries[0] - pos.price_open) / self.contract_size - spread) * pos.volume
+                    pnl += ((self.boundaries[0] - pos.price_open) / self.contract_size) * pos.volume
                 else:
                     pnl -= ((self.boundaries[0] - pos.price_open) / self.contract_size) * pos.volume
             else:
                 if pos.type == mt5.POSITION_TYPE_SELL:
-                    pnl += ((pos.price_open - self.boundaries[1]) / self.contract_size - spread) * pos.volume
+                    pnl += ((pos.price_open - self.boundaries[1]) / self.contract_size) * pos.volume
                 else:
                     pnl -= ((pos.price_open - self.boundaries[1]) / self.contract_size) * pos.volume
 
 
-        return round(pnl / self.contract_size, 2)
+        return round(pnl, 2)
 
 
     @retry(max_attempts=3, delay=0.5)
@@ -582,11 +580,6 @@ class PositionManager:
         sell_pnl = self.calc_pnl(positions, "sell", buy_entry, sell_entry)
         if update:
             buys, buy_entry, buy_pnl, sells, sell_entry, sell_pnl = self.deals(buys, buy_entry, buy_pnl, sells, sell_entry, sell_pnl)
-
-        # buy_pnl -= 38.62
-        # sell_pnl += 41.38
-        # sells += 1
-
 
         self.logger.info(f"Estimated pnl for buys: {buy_pnl}")
         self.logger.info(f"Estimated pnl for sells: {sell_pnl}")
@@ -771,6 +764,215 @@ class PositionManager:
                 self.open_pos = len(positions)
 
 
+    def make_alien_request(self, positions, update=False):
+        # 2. alien order is placed in opposing direction 1/4th way [sell][175] with tp ad midway [150]
+                #   and sl at top [300]
+                #   reduce boundary on opp[sell] side to midway
+                #  Order is 0.1 + lots required to negate pnl2. alien order is placed in opposing direction 1/4th way [sell][175] with tp ad midway [150]
+                        #   and sl at top [300]
+                        #   reduce boundary on opp[sell] side to midway
+                        #  Order is 0.1 + lots required to negate pnl2. alien order is placed in opposing direction 1/4th way [sell][175] with tp ad midway [150]
+                                #   and sl at top [300]
+                                #   reduce boundary on opp[sell] side to midway
+                                #  Order is 0.1 + lots required to negate pnl
+        buys = sells = 0
+        buy_entry = 100**100
+        sell_entry = 0
+        for position in positions:
+            if position.type == mt5.POSITION_TYPE_BUY:
+                buys += 1
+                buy_entry = min(buy_entry, position.price_open)
+            else:
+                sells +=1
+                sell_entry = max(sell_entry, position.price_open)
+
+        buy_pnl = self.calc_pnl(positions, "buy", buy_entry, sell_entry)
+        sell_pnl = self.calc_pnl(positions, "sell", buy_entry, sell_entry)
+        if update:
+            buys, buy_entry, buy_pnl, sells, sell_entry, sell_pnl = self.deals(buys, buy_entry, buy_pnl, sells, sell_entry, sell_pnl)
+
+        self.logger.info(f"Estimated pnl for buys: {buy_pnl}")
+        self.logger.info(f"Estimated pnl for sells: {sell_pnl}")
+
+        if self.entries is not None and self.boundaries is not None:
+            if buy_entry != self.entries[0] or sell_entry != self.entries[1]:
+                self.logger.error(f"Entry mismatch: {self.entries} != ({buy_entry}, {sell_entry})")
+            buy_entry = self.entries[0]
+            sell_entry = self.entries[1]
+
+            buy_tp = self.boundaries[0]
+            sell_tp = self.boundaries[1]
+        else:
+            self.set_boundaries()
+            return self.make_alien_request(positions, update)
+
+
+
+        # abs_profit_sum = abs(buy_pnl) + abs(sell_pnl)
+        # price_diff = buy_tp - sell_tp
+        # lot_size = round(abs_profit_sum/price_diff, 2)
+        # lot_size = max(lot_size, 0.01)
+        # self.logger.info(f"ABS_SUM: {abs_profit_sum} | PriceDiff: {price_diff}")
+        # self.logger.info(f"Using lot size = {lot_size}")
+        tick = mt5.symbol_info_tick(self.symbol)
+        spread = tick.ask - tick.bid
+
+        if buy_pnl > sell_pnl:
+            opp_direction = "sell"
+            entry = normalize_price(sell_entry - (sell_entry - sell_tp + spread) / 4, self.symbol_info)
+            price_diff = entry - sell_tp + spread
+            offset = sell_entry - entry
+            # SL and TP pips
+            sl = (self.boundaries[0] - entry) * contract_size
+            tp = (entry - (self.boundaries[1] + spread)) * contract_size
+
+
+            lot_size = round((-sell_pnl + self.alien_profit)/price_diff, 2)
+            if lot_size < 0.01:
+                self.logger.error(f"Invalid lot size [{lot_size}] for alien order")
+                return
+            # self.logger.info(f"ABS_SUM: {abs_profit_sum} | PriceDiff: {price_diff}")
+            self.logger.info(f"Using lot size = {lot_size}")
+
+            if tick.bid > entry:
+                order_type = f"{opp_direction} stop"
+            else:
+                order_type = f"{opp_direction} limit"
+        else:
+            opp_direction = "buy"
+            entry = normalize_price(buy_entry + (buy_tp - spread - buy_entry) / 4, self.symbol_info)
+            price_diff = buy_tp - spread - entry
+            offset = entry - buy_entry
+            # SL and TP pips
+            sl = (entry - self.boundaries[1]) * contract_size
+            tp = ((self.boundaries[0] - spread) - entry) * contract_size
+
+
+            lot_size = round((-buy_pnl + self.alien_profit)/price_diff, 2)
+            if lot_size < 0.01:
+                self.logger.error(f"Invalid lot size [{lot_size}] for alien order")
+                return
+            self.logger.info(f"Using lot size = {lot_size}")
+
+            if tick.ask < entry:
+                order_type = f"{opp_direction} stop"
+            else:
+                order_type = f"{opp_direction} limit"
+
+            # tp = args.max_tp + offset
+            # sl = args.max_tp - of
+        # offset -= spread
+        # tp = self.foreign_tp_pips - offset # TP Pips
+        # sl = self.foreign_tp_pips + offset # SL Pips
+
+        self.logger.info(f"="*50)
+        self.logger.info(f"Offset: {offset}")
+        self.logger.info(f"Entry: {entry} | TP_PIPS: {tp} | SL_PIPS: {sl}")
+        self.logger.info(f"Entries: Buy={buy_entry} | Sell={sell_entry}")
+        self.logger.info(f"="*50)
+        self.logger.info(f"Placing {opp_direction} stop alien order ...")
+
+        verified = self.verify_request(entry, sl, tp)
+        if verified is None:
+            self.logger.error("Verification Error")
+        else:
+            sl, tp = verified
+
+        request = make_request(
+            symbol=self.symbol,
+            order_type=order_type,
+            start_price=entry,
+            volume_per_order=lot_size,
+            stop_loss_pips=sl,
+            take_profit_pips=tp,
+            symbol_info=self.symbol_info,
+            comment=f"Alien order {self.alien_order_no}",
+            magic=self.magic_num,
+        )
+
+        return request
+
+    def alien_order(self, positions):
+        # Watch until one side filled then, delete pending orders
+        # 1. Determine the direction filled [buy]
+        # 2. alien order is placed in opposing direction 1/4th way [sell][175] with tp ad midway [150]
+        #   and sl at top [300]
+        #   reduce boundary on opp[sell] side to midway
+        #  Order is 0.1 + lots required to negate pnl
+
+        # positions = [p for p in mt5.positions_get(symbol=self.symbol) if p.magic == self.magic_num]
+        orders    = [o for o in mt5.orders_get(symbol=self.symbol) if o.magic == self.magic_num]
+
+        buy_orders = [o for o in orders if o.type == mt5.ORDER_TYPE_BUY_STOP]
+        sell_orders = [o for o in orders if o.type == mt5.ORDER_TYPE_SELL_STOP]
+
+        if not buy_orders or not sell_orders:
+            if not self.orders_deleted:
+                if not buy_orders:
+                    self.alien_side = "sell"
+                else:
+                    self.alien_side = "buy"
+
+                self.logger.info("Side filled, deleting pending orders...")
+                self.set_boundaries()
+                self.delete_orders(self.symbol, self.magic_num)
+                request = self.make_alien_request(positions)
+                self.alien_ticket = send_single_order(request)
+                # Perform error checks:
+                if self.alien_ticket:
+                    while not mt5.orders_get(ticket=self.alien_ticket):
+                        self.logger.info(f"Ticket {self.alien_ticket} not found, sleeping...")
+                        t_mod.sleep(0.5)
+
+                    self.open_pos = len(positions)
+                    self.orders_deleted = True
+                    self.alien_order_no += 1
+
+            # elif len(positions) < self.open_pos and not self.alien_activated:
+            #     # Update alien order if any position closes
+            #     order = mt5.orders_get(ticket=self.alien_ticket)
+            #     if order is None:
+            #         self.logger.error(f"Order {self.alien_ticket} not found. Error: {mt5.last_error()}")
+            #         self.open_pos = len(positions)
+            #         # break
+            #         mt5.shutdown()
+            #     request = self.make_alien_request(positions, update=True)
+            #     self.delete_order(self.alien_ticket)
+            #     self.alien_ticket = send_single_order(request)
+            #     self.open_pos = len(positions)
+
+            elif not orders and not self.alien_activated: #(len(positions) > self.open_pos) or
+                # Perhaps alien order triggered
+                self.open_pos = len(positions)
+                self.positions = positions
+                if self.alien_order_no == 1:
+                    self.logger.info("Shrinking trade area...")
+                    self.shrink_trades()
+                # return
+                # Update foreign order
+                position = mt5.positions_get(ticket=self.alien_ticket)
+                if position is None:
+                    self.logger.error(f"Position {self.alien_ticket} not found. Error: {mt5.last_error()}")
+                    self.alien_ticket = int(input("Enter alien order ticket >> "))
+                    if not self.alien_ticket:
+                        self.logger.error("Invalid ticket, exiting...")
+                        mt5.shutdown()
+                else:
+                    self.logger.info(f"Alien order found")
+                    self.logger.info(f"{orders=}")
+                    self.logger.info(f"{self.alien_activated=}")
+                    if self.alien_order_no >= 2:
+                        self.alien_activated = True
+                    else:
+                        self.logger.info(f"Placing alien order {self.alien_order_no}")
+                        request = self.make_alien_request(positions)
+                        self.alien_ticket = send_single_order(request)
+                        self.alien_order_no += 1
+
+                # request = self.make_foreign_request(positions, update=True)
+                # request["order"] = self.alien_ticket
+                # self.alien_ticket = send_single_order(request)
+                self.open_pos = len(positions)
 
 
     def run(self):
@@ -804,7 +1006,8 @@ class PositionManager:
             my_pos = [p for p in positions if p.magic == self.magic_num]
 
             # Manage foreign order
-            self.foreign_order(my_pos)
+            # self.foreign_order(my_pos)
+            self.alien_order(my_pos)
 
             open_pos = len(my_pos) > 0
 
@@ -873,10 +1076,15 @@ class PositionManager:
                     tp_ratio = tp_pips / self.max_tp
                     tp_diff = self.max_tp - tp_pips
 
+
                     if pos.type == mt5.ORDER_TYPE_BUY:
                         dist_to_tp = (pos.tp - tick.bid) / self.contract_size
+                        if tick.bid >= pos.price_open + self.states[pos.ticket].tp_pips:
+                            tp_diff = 0
                     else:
                         dist_to_tp = (tick.ask - pos.tp) / self.contract_size
+                        if tick.ask <= pos.price_open - self.states[pos.ticket].tp_pips:
+                            tp_diff = 0
 
                 for s in self.config["risk_management"]["trailing_stages"]:
                     # if self.states[pos.ticket].max_pnl >= s['min_profit'] * tp_ratio * trail_scale:

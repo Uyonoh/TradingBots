@@ -100,7 +100,7 @@ def retry(
                     if attempt == max_attempts:
                         if resolved_logger:
                             resolved_logger.error(f"Operation failed after {max_attempts} attempts: {e}")
-                        raise
+                        # raise
 
                     if resolved_logger:
                         resolved_logger.warning(f"Attempt {attempt}/{max_attempts} failed: {e}. "
