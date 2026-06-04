@@ -433,6 +433,17 @@ class PositionManager:
             self.logger.info(f"Entries: Buy={buy_entry} | Sell={sell_entry}")
             # tick = mt5.symbol_info_tick(self.symbol)
             # spread = tick.ask - tick.bid
+            if (buy_entry == 100**100) and (sell_entry == 0):
+                self.positions = [p for p in mt5.positions_get(symbol=self.symbol) if p.magic == self.magic_num]
+                if not self.positions:
+                    raise ValueError("Empty positions")
+                else:
+                    self.set_boundaries()
+            elif buy_entry == 100**100:
+                buy_entry = sell_entry + self.spread
+            elif sell_entry == 0:
+                sell_entry = buy_entry - self.spread
+
             p1 = buy_entry + self.foreign_tp_pips
             p2 = sell_entry - self.foreign_tp_pips
             self.logger.info(f"boundaries: {p1} | {p2}, FP= {self.foreign_tp_pips}")
@@ -445,7 +456,8 @@ class PositionManager:
 
     def shrink_trades(self):
         spread = self.last_ask - self.last_bid
-        for pos in self.positions:
+        positions = [p for p in mt5.positions_get(symbol=self.symbol) if p.magic == self.magic_num]
+        for pos in positions:
             if pos.ticket == self.foreign_ticket or pos.ticket == self.alien_ticket:
                 continue
             if pos.type == mt5.POSITION_TYPE_BUY:
@@ -571,7 +583,7 @@ class PositionManager:
 
         return sl, tp
 
-    def make_foreign_request(self, positions, update=False):
+    def make_foreign_request(self, positions, update=False, half=False):
         buys = sells = 0
         buy_entry = 100**100
         sell_entry = 0
@@ -601,9 +613,11 @@ class PositionManager:
             sell_tp = self.boundaries[1]
         else:
             self.set_boundaries()
-            return self.make_foreign_request(positions, update)
+            return self.make_foreign_request(positions, update, half)
 
-
+        if half:
+            buy_pnl /= 2
+            sell_pnl /= 2
 
         abs_profit_sum = abs(buy_pnl) + abs(sell_pnl)
         price_diff = buy_tp - sell_tp
@@ -678,7 +692,7 @@ class PositionManager:
         return request
 
 
-    def foreign_order(self, positions):
+    def foreign_order(self, positions, final=False, half=False):
         """
         get all deals
 
@@ -713,15 +727,28 @@ class PositionManager:
         sell_orders = [o for o in orders if o.type == mt5.ORDER_TYPE_SELL_STOP]
 
         if not buy_orders or not sell_orders:
-            # self.open_pos = len(positions) - 1
-            # self.orders_deleted = True
+            if final:
+                self.logger.info("Placing final order [Foreign]...")
+
+                request = self.make_foreign_request(positions, False, half)
+                self.foreign_ticket = send_single_order(request)
+                # Perform error checks:
+                if self.foreign_ticket:
+                    while not mt5.orders_get(ticket=self.foreign_ticket):
+                        self.logger.info(f"Ticket {self.foreign_ticket} not found, sleeping...")
+                        t_mod.sleep(0.5)
+
+                    self.open_pos = len(positions)
+                    self.foreign_activated = True
+                    return
+
             if not self.orders_deleted:
                 self.logger.info("Side filled, deleting pending orders...")
                 self.delete_orders(self.symbol, self.magic_num)
                 # self.logger.info("Shrinking trade area...")
                 # self.shrink_trades()
 
-                request = self.make_foreign_request(positions)
+                request = self.make_foreign_request(positions, False, half)
                 self.foreign_ticket = send_single_order(request)
                 # Perform error checks:
                 if self.foreign_ticket:
@@ -740,7 +767,7 @@ class PositionManager:
                     self.open_pos = len(positions)
                     # break
                     mt5.shutdown()
-                request = self.make_foreign_request(positions, update=True)
+                request = self.make_foreign_request(positions, update=True, half=half)
                 self.delete_order(self.foreign_ticket)
                 self.foreign_ticket = send_single_order(request)
                 self.open_pos = len(positions)
@@ -822,23 +849,20 @@ class PositionManager:
         # self.logger.info(f"ABS_SUM: {abs_profit_sum} | PriceDiff: {price_diff}")
         # self.logger.info(f"Using lot size = {lot_size}")
         tick = mt5.symbol_info_tick(self.symbol)
-        spread = tick.ask - tick.bid
+        spread = self.spread
 
         if buy_pnl > sell_pnl:
             opp_direction = "sell"
-            entry = normalize_price(sell_entry - (sell_entry - sell_tp + spread) / 4, self.symbol_info)
-            price_diff = entry - sell_tp + spread
+            entry = normalize_price(sell_entry - (sell_entry - sell_tp - spread) / 2, self.symbol_info)
+            price_diff = entry - sell_tp - spread
             offset = sell_entry - entry
             # SL and TP pips
             sl = (self.boundaries[0] - entry) * self.contract_size
             tp = (entry - (self.boundaries[1] + spread)) * self.contract_size
-
-
-            lot_size = round((-sell_pnl + self.alien_profit)/price_diff, 2)
+            lot_size = round((-sell_pnl * 2)/price_diff, 2)
             if lot_size < 0.01:
                 self.logger.error(f"Invalid lot size [{lot_size}] for alien order")
                 return
-            # self.logger.info(f"ABS_SUM: {abs_profit_sum} | PriceDiff: {price_diff}")
             self.logger.info(f"Using lot size = {lot_size}")
 
             if tick.bid > entry:
@@ -847,15 +871,13 @@ class PositionManager:
                 order_type = f"{opp_direction} limit"
         else:
             opp_direction = "buy"
-            entry = normalize_price(buy_entry + (buy_tp - spread - buy_entry) / 4, self.symbol_info)
+            entry = normalize_price(buy_entry + (buy_tp - spread - buy_entry) / 2, self.symbol_info)
             price_diff = buy_tp - spread - entry
             offset = entry - buy_entry
             # SL and TP pips
             sl = (entry - self.boundaries[1]) * self.contract_size
             tp = ((self.boundaries[0] - spread) - entry) * self.contract_size
-
-
-            lot_size = round((-buy_pnl + self.alien_profit)/price_diff, 2)
+            lot_size = round((-buy_pnl * 2)/price_diff, 2)
             if lot_size < 0.01:
                 self.logger.error(f"Invalid lot size [{lot_size}] for alien order")
                 return
@@ -873,7 +895,7 @@ class PositionManager:
         # sl = self.foreign_tp_pips + offset # SL Pips
 
         self.logger.info(f"="*50)
-        self.logger.info(f"Offset: {offset}")
+        self.logger.info(f"price_diff: {price_diff}")
         self.logger.info(f"Entry: {entry} | TP_PIPS: {tp} | SL_PIPS: {sl}")
         self.logger.info(f"Entries: Buy={buy_entry} | Sell={sell_entry}")
         self.logger.info(f"="*50)
@@ -893,7 +915,7 @@ class PositionManager:
             stop_loss_pips=sl,
             take_profit_pips=tp,
             symbol_info=self.symbol_info,
-            comment=f"Alien order {self.alien_order_no}",
+            comment=f"Alien order {self.alien_order_no if not update else (self.alien_order_no - 1)}",
             magic=self.magic_num,
         )
 
@@ -935,18 +957,18 @@ class PositionManager:
                     self.orders_deleted = True
                     self.alien_order_no += 1
 
-            # elif len(positions) < self.open_pos and not self.alien_activated:
-            #     # Update alien order if any position closes
-            #     order = mt5.orders_get(ticket=self.alien_ticket)
-            #     if order is None:
-            #         self.logger.error(f"Order {self.alien_ticket} not found. Error: {mt5.last_error()}")
-            #         self.open_pos = len(positions)
-            #         # break
-            #         mt5.shutdown()
-            #     request = self.make_alien_request(positions, update=True)
-            #     self.delete_order(self.alien_ticket)
-            #     self.alien_ticket = send_single_order(request)
-            #     self.open_pos = len(positions)
+            elif len(positions) < self.open_pos and not self.alien_activated:
+                # Update alien order if any position closes
+                order = mt5.orders_get(ticket=self.alien_ticket)
+                if order is None:
+                    self.logger.error(f"Order {self.alien_ticket} not found. Error: {mt5.last_error()}")
+                    self.open_pos = len(positions)
+                    # break
+                    mt5.shutdown()
+                request = self.make_alien_request(positions, update=True)
+                self.delete_order(self.alien_ticket)
+                self.alien_ticket = send_single_order(request)
+                self.open_pos = len(positions)
 
             elif not orders and not self.alien_activated: #(len(positions) > self.open_pos) or
                 # Perhaps alien order triggered
@@ -968,8 +990,10 @@ class PositionManager:
                     self.logger.info(f"Alien order found")
                     self.logger.info(f"{orders=}")
                     self.logger.info(f"{self.alien_activated=}")
-                    if self.alien_order_no >= 2:
+                    if self.alien_order_no >= 3:
                         self.alien_activated = True
+                        # if not self.foreign_activated:
+                        #     self.foreign_order(self.positions, final=True)
                     else:
                         self.logger.info(f"Placing alien order {self.alien_order_no}")
                         request = self.make_alien_request(positions)
@@ -980,6 +1004,10 @@ class PositionManager:
                 # request["order"] = self.alien_ticket
                 # self.alien_ticket = send_single_order(request)
                 self.open_pos = len(positions)
+            elif not orders and not self.foreign_activated:
+                if self.alien_order_no == 2:
+                    self.alien_activated = True
+                    self.foreign_order(self.positions, final=True)
 
 
     def run(self):
@@ -1104,7 +1132,7 @@ class PositionManager:
                     # Calculate new SL
                     if best_retention == -1:
                         # Leave sl at original
-                        pass
+                        continue
                     elif best_retention == 0:
                         # Set all SLs to first order
                         max_pips = -1
@@ -1161,6 +1189,7 @@ class PositionManager:
                                     self.remove_tp(self.symbol, pos)
 
                     else:
+                        continue
                         trail_dist = self.states[pos.ticket].max_pnl * best_retention
                         trail_dist /= self.contract_size
                         new_sl = (
@@ -1299,7 +1328,7 @@ def main(args_list=None):
 
     args = parser.parse_args(args_list)
 
-    symbol = args.symbol.strip().upper()
+    symbol = args.symbol.strip() #.upper()
     magic_num = args.magic
 
     from utils import TradingLogger

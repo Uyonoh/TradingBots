@@ -66,7 +66,7 @@ def man():
 
 class TradingBot:
     def __init__(self, symbol):
-        symbol = symbol.upper()
+        symbol = symbol #.upper()
         self.symbol = symbol
         self.name = f"{symbol}_bot"
         now = datetime.datetime.now()
@@ -444,7 +444,7 @@ class TradingBot:
                 "spacing_pips": 10 * 5,
                 "num_orders": 8,
             }
-        elif args.target >= 500:
+        elif args.target != 0:
             inputs = {
                 "lot_size": 0.01,
                 "sl pips": args.target,
