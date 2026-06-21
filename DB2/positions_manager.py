@@ -149,6 +149,7 @@ class PositionManager:
         self.positions_shrunk = False
         self.trailing = False
         self.last_ask = self.last_bid = None
+        self.foreign_ticket = self.alien_ticket = None
 
         self.alien_profit = 7
         self.alien_order_no = 0
@@ -451,8 +452,8 @@ class PositionManager:
             self.boundaries = (p1, p2)
             self.entries = (buy_entry, sell_entry)
         except Exception as e:
-            self.logger.error(f"Unexpected error: {e}")
-            raise Exception
+            self.logger.error(f"Unexpected error when setting boundaries: {e}")
+            raise Exception(e)
 
     def shrink_trades(self):
         spread = self.last_ask - self.last_bid
@@ -537,7 +538,11 @@ class PositionManager:
 
         # buy_pnl = 0 # tp for buy sl for sell
         # sell_pnl = 0 # tp for sell sl for buy
-        for deal in mt5.history_deals_get(from_date, to_date, group=self.symbol):
+        self.logger.info(f"Fetching deals from {from_date} to {to_date}...")
+        deals = mt5.history_deals_get(from_date, to_date, group=self.symbol)
+        self.logger.info(f"Deals = {deals}")
+        self.logger.info(f"Initial PNLs -- Buy: {buy_pnl}, Sell: {sell_pnl}")
+        for deal in deals:
             if not deal.magic == self.magic_num:
                 continue
 
@@ -562,6 +567,7 @@ class PositionManager:
                 #     sell_pnl += deal.profit
                 buys += 1
                 pnl += deal.profit
+            self.logger.info(f"\tUpdated Buy: {buy_pnl}, Sell: {sell_pnl}")
 
         buy_pnl += pnl
         sell_pnl += pnl
@@ -759,18 +765,18 @@ class PositionManager:
                     self.open_pos = len(positions)
                     self.orders_deleted = True
 
-            elif len(positions) < self.open_pos and not self.foreign_activated:
-                # Update foreign order if any position closes
-                order = mt5.orders_get(ticket=self.foreign_ticket)
-                if order is None:
-                    self.logger.error(f"Order {self.foreign_ticket} not found. Error: {mt5.last_error()}")
-                    self.open_pos = len(positions)
-                    # break
-                    mt5.shutdown()
-                request = self.make_foreign_request(positions, update=True, half=half)
-                self.delete_order(self.foreign_ticket)
-                self.foreign_ticket = send_single_order(request)
-                self.open_pos = len(positions)
+            # elif len(positions) < self.open_pos and not self.foreign_activated:
+            #     # Update foreign order if any position closes
+            #     order = mt5.orders_get(ticket=self.foreign_ticket)
+            #     if order is None:
+            #         self.logger.error(f"Order {self.foreign_ticket} not found. Error: {mt5.last_error()}")
+            #         self.open_pos = len(positions)
+            #         # break
+            #         mt5.shutdown()
+            #     request = self.make_foreign_request(positions, update=True, half=half)
+            #     self.delete_order(self.foreign_ticket)
+            #     self.foreign_ticket = send_single_order(request)
+            #     self.open_pos = len(positions)
 
             elif not orders and not self.foreign_activated: #(len(positions) > self.open_pos) or
                 # Perhaps foreign order triggered
@@ -990,7 +996,7 @@ class PositionManager:
                     self.logger.info(f"Alien order found")
                     self.logger.info(f"{orders=}")
                     self.logger.info(f"{self.alien_activated=}")
-                    if self.alien_order_no >= 2:
+                    if self.alien_order_no >= 1:
                         self.alien_activated = True
                         # if not self.foreign_activated:
                         #     self.foreign_order(self.positions, final=True)
@@ -1007,8 +1013,27 @@ class PositionManager:
             elif not orders and not self.foreign_activated:
                 if self.alien_order_no == 2:
                     self.alien_activated = True
-                    #self.foreign_order(self.positions, final=True)
+                    self.foreign_order(self.positions, final=True)
 
+    def monitor_orders(self):
+        if not self.orders_deleted:
+            # positions = [p for p in mt5.positions_get(symbol=self.symbol) if p.magic == self.magic_num]
+            orders    = [o for o in mt5.orders_get(symbol=self.symbol) if o.magic == self.magic_num]
+
+            buy_orders = [o for o in orders if o.type == mt5.ORDER_TYPE_BUY_STOP]
+            sell_orders = [o for o in orders if o.type == mt5.ORDER_TYPE_SELL_STOP]
+
+            if not buy_orders or not sell_orders:
+
+                self.logger.info("Side filled, deleting final pending order...")
+                last_pos = orders[-1]
+                for order in orders:
+                    print(order)
+                    if order.volume_current >= last_pos.volume_current:
+                        last_pos = order
+
+                self.delete_order(last_pos.ticket)
+                self.orders_deleted = True
 
     def run(self):
 
@@ -1024,6 +1049,7 @@ class PositionManager:
         while True:
             # 1. Hardware Efficiency: Sleep to reduce CPU usage
             t_mod.sleep(0.1)
+            #self.monitor_orders()
             tick = mt5.symbol_info_tick(self.symbol)
             spread = tick.ask - tick.bid
             self.last_ask = tick.ask
@@ -1038,11 +1064,18 @@ class PositionManager:
                 self.logger.error("Failed to retrieve positions:", mt5.last_error())
                 continue
 
+            if not positions and not self.args.keep_alive:
+                self.logger.info(f"No positions found for {self.symbol}, exiting...")
+                self.delete_orders(self.symbol, self.magic_num)
+                return
+
+
+
             my_pos = [p for p in positions if p.magic == self.magic_num]
 
             # Manage foreign order
             # self.foreign_order(my_pos)
-            self.alien_order(my_pos)
+            #self.alien_order(my_pos)
 
             open_pos = len(my_pos) > 0
 
@@ -1051,11 +1084,6 @@ class PositionManager:
                     self.states[pos.ticket] = StrategyState()
                     self.states[pos.ticket].in_trade = True
                     self.states[pos.ticket].tp_pips = abs(pos.price_open - pos.tp)
-
-            if not open_pos and not self.args.keep_alive:
-                self.delete_orders(self.symbol, self.magic_num)
-                self.logger.info(f"No positions found for {self.symbol}, exiting...")
-                return
 
             # -----------------------------------------------------------
             # EXIT / RISK MANAGEMENT LOGIC
@@ -1336,7 +1364,12 @@ def main(args_list=None):
     trading_logger.setup_logging(symbol, args.log_level)
 
     position_manager = PositionManager(symbol, magic_num, args, logger=None)
-    position_manager.run()
+    try:
+        position_manager.run()
+    except KeyboardInterrupt:
+        raise KeyboardInterrupt()
+    except Exception as e:
+        position_manager.logger.error(f"Unexpected error: {e}")
 
 if __name__ == "__main__":
     try:
