@@ -143,6 +143,8 @@ def main():
                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                        help="Logging level")
     parser.add_argument("--exclude", help="Comma serparated string of excluded magic numbers. These are treated as non-existent")
+    parser.add_argument("--preload", action="store_true",
+                       help="Load module and await start command for speed up")
 
     args = parser.parse_args()
     symbol = args.symbol #.upper()
@@ -163,6 +165,12 @@ def main():
     excluded = get_excluded(args, logger)
     logger.info(f"\tExcluding all of {excluded}.")
     logger.info("Initialization successful.")
+
+    if args.preload:
+        start = False
+        while not start:
+            start = input("Do you want to begin now? ").lower() == "y"
+            time.sleep(1)
 
     if args.time:
         try:
