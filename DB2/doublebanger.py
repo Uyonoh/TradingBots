@@ -214,10 +214,33 @@ class TradingBot:
             inputs = self.get_inputs(["num_orders"])
         return doublebanger(self, inputs, **kwargs)
 
+    def get_entry_with_rc_buffer(self, buffer: int = 30):
+        """ Return trade entry `buffer` pips away from the hour open
+            Uses RC of last candle to determine entry direction
+        """
+        rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_H1, 0, 2)
+
+        # Use prev candle for RC
+        r = rates[0]
+        open, high, low, close = r["open"], r["high"], r["low"], r["close"]
+        rc = (close - low) / (high - low)
+
+        # Go opposite to RC from current open
+        entry = rates[1]["open"]
+        if rc < 0.5: # Allow 0.5 as
+            entry += 30
+        else:
+            entry -= 30
+
+        return entry
+
     def doublebanger(self, args, **kwargs):
         inputs: dict = kwargs.get("inputs", None)
         if inputs is None:
             inputs = self.get_inputs(["num_orders", "spacing_pips"])
+
+        if args.retrace and args.retrace > 0:
+            inputs["entry"] = self.get_entry_with_rc_buffer(args.retrace)
 
         if args.time:
             try:
@@ -643,6 +666,7 @@ def main(args_list=None):
     parser.add_argument("--time", help="start time with window of 5mins [hh:mm]")
     parser.add_argument("--target", type=int, default=0, help="Target tp pips")
     parser.add_argument("--breadth", type=int, default=5, help="Spacing from price to daily bangers")
+    parser.add_argument("--retrace", type=int, default=0, help="Retrace from entry in opposing direction to previous H1 candle")
     args = parser.parse_args(args_list)
 
     bot = TradingBot(args.symbol, args.log_level)
