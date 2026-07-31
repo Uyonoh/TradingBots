@@ -865,7 +865,7 @@ class PositionManager:
             # SL and TP pips
             sl = (self.boundaries[0] - entry) * self.contract_size
             tp = (entry - (self.boundaries[1] + spread)) * self.contract_size
-            lot_size = round((-sell_pnl * 1)/price_diff, 2)
+            lot_size = round((-sell_pnl * 1.2)/price_diff, 2)
             if lot_size < 0.01:
                 self.logger.error(f"Invalid lot size [{lot_size}] for alien order")
                 return
@@ -883,7 +883,7 @@ class PositionManager:
             # SL and TP pips
             sl = (entry - self.boundaries[1]) * self.contract_size
             tp = ((self.boundaries[0] - spread) - entry) * self.contract_size
-            lot_size = round((-buy_pnl * 1)/price_diff, 2)
+            lot_size = round((-buy_pnl * 1.2)/price_diff, 2)
             if lot_size < 0.01:
                 self.logger.error(f"Invalid lot size [{lot_size}] for alien order")
                 return
@@ -1076,7 +1076,7 @@ class PositionManager:
 
             # Manage foreign order
             # self.foreign_order(my_pos)
-            self.alien_order(my_pos)
+            #self.alien_order(my_pos)
 
             open_pos = len(my_pos) > 0
 
