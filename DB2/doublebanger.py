@@ -227,9 +227,9 @@ class TradingBot:
 
         # Go opposite to RC from current open
         entry = rates[1]["open"]
-        if rc < 0.5: # Allow 0.5 as
+        if rc < 0.5:
             entry += 30
-        else:
+        elif rc > 0.5:
             entry -= 30
 
         return entry
@@ -683,8 +683,8 @@ def main(args_list=None):
 
     action = args.action.replace("_", "")
     if not action in dispatch.keys():
-        # return
-        pass
+        return
+        # pass
 
     try:
         dispatch[action](args)

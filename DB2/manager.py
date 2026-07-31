@@ -169,7 +169,7 @@ def main():
     if args.preload:
         start = False
         while not start:
-            start = input("Do you want to begin now? ").lower() == "y"
+            start = input("Do you want to begin now? [y/n] ").lower() == "y"
             time.sleep(1)
 
     if args.time:
@@ -207,7 +207,7 @@ def main():
                     print("Sleeping for 1 minute")
                     time.sleep(1 * 60)
                 else:
-                    time.sleep(10)
+                    time.sleep(1)
         except Exception as e:
             raise Exception(f"Data error: {e}")
 

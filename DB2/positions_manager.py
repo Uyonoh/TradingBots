@@ -865,7 +865,7 @@ class PositionManager:
             # SL and TP pips
             sl = (self.boundaries[0] - entry) * self.contract_size
             tp = (entry - (self.boundaries[1] + spread)) * self.contract_size
-            lot_size = round((-sell_pnl * 1.2)/price_diff, 2)
+            lot_size = round((-sell_pnl * 1)/price_diff, 2)
             if lot_size < 0.01:
                 self.logger.error(f"Invalid lot size [{lot_size}] for alien order")
                 return
@@ -883,7 +883,7 @@ class PositionManager:
             # SL and TP pips
             sl = (entry - self.boundaries[1]) * self.contract_size
             tp = ((self.boundaries[0] - spread) - entry) * self.contract_size
-            lot_size = round((-buy_pnl * 1.2)/price_diff, 2)
+            lot_size = round((-buy_pnl * 1)/price_diff, 2)
             if lot_size < 0.01:
                 self.logger.error(f"Invalid lot size [{lot_size}] for alien order")
                 return
@@ -965,6 +965,7 @@ class PositionManager:
 
             elif len(positions) < self.open_pos and not self.alien_activated:
                 # Update alien order if any position closes
+                return
                 order = mt5.orders_get(ticket=self.alien_ticket)
                 if order is None:
                     self.logger.error(f"Order {self.alien_ticket} not found. Error: {mt5.last_error()}")
@@ -1010,10 +1011,10 @@ class PositionManager:
                 # request["order"] = self.alien_ticket
                 # self.alien_ticket = send_single_order(request)
                 self.open_pos = len(positions)
-            elif not orders and not self.foreign_activated:
-                if self.alien_order_no == 2:
-                    self.alien_activated = True
-                    self.foreign_order(self.positions, final=True)
+            # elif not orders and not self.foreign_activated:
+            #     if self.alien_order_no == 2:
+            #         self.alien_activated = True
+            #         self.foreign_order(self.positions, final=True)
 
     def monitor_orders(self):
         if not self.orders_deleted:
@@ -1075,7 +1076,7 @@ class PositionManager:
 
             # Manage foreign order
             # self.foreign_order(my_pos)
-            #self.alien_order(my_pos)
+            self.alien_order(my_pos)
 
             open_pos = len(my_pos) > 0
 
@@ -1370,6 +1371,9 @@ def main(args_list=None):
         raise KeyboardInterrupt()
     except Exception as e:
         position_manager.logger.error(f"Unexpected error: {e}")
+    finally:
+        position_manager.delete_orders(position_manager.symbol, position_manager.magic_num)
+        position_manager.logger.info("Cleaned up orders")
 
 if __name__ == "__main__":
     try:

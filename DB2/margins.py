@@ -5,7 +5,7 @@ from datetime import datetime
 import MetaTrader5 as mt5
 
 # ==================== CONFIGURATION ====================
-CSV_FILE = "./logs/mt5_margin_log.csv"
+CSV_FILE = "./logs/mt5_live_margin_log.csv"
 LOG_INTERVAL_SECONDS = 1  # Frequency of checks (e.g., every 1 second)
 # =======================================================
 
