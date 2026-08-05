@@ -17,6 +17,7 @@ dependencies = [
     "pytest>=9.0.2",
     "python-dotenv>=1.2.1",
     "pytz>=2025.2",
+    "rpyc==6.0.2",
     "scikit-optimize>=0.10.2",
     "seaborn>=0.13.2",
     "tqdm>=4.67.1",

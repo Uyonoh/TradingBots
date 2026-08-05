@@ -1076,7 +1076,7 @@ class PositionManager:
 
             # Manage foreign order
             # self.foreign_order(my_pos)
-            #self.alien_order(my_pos)
+            # self.alien_order(my_pos)
 
             open_pos = len(my_pos) > 0
 
