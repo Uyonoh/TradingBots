@@ -149,7 +149,7 @@ class TradingBot:
                 valid = True
 
         # Check entry proximity
-        active_trades = get_open_positions() + get_pending_orders()
+        """active_trades = get_open_positions() + get_pending_orders()
         for row in active_trades:
             if abs(row["entry_price"] - data["entry"]) <= 50:
                 self.logger.info(
@@ -166,6 +166,7 @@ class TradingBot:
                     break
                 raise ValueError("Aborting order...")
 
+            """
         return data
 
     def order_buy(self):
@@ -228,9 +229,9 @@ class TradingBot:
         # Go opposite to RC from current open
         entry = rates[1]["open"]
         if rc < 0.5:
-            entry += 30
+            entry += buffer
         elif rc > 0.5:
-            entry -= 30
+            entry -= buffer
 
         return entry
 
@@ -239,8 +240,6 @@ class TradingBot:
         if inputs is None:
             inputs = self.get_inputs(["num_orders", "spacing_pips"])
 
-        if args.retrace and args.retrace > 0:
-            inputs["entry"] = self.get_entry_with_rc_buffer(args.retrace)
 
         if args.time:
             try:
@@ -280,6 +279,9 @@ class TradingBot:
                         time.sleep(10)
             except Exception as e:
                 raise Exception(f"Data error: {e}")
+
+        if args.retrace and args.retrace > 0:
+            inputs["entry"] = self.get_entry_with_rc_buffer(args.retrace)
 
         comment = "Double " + args.comment
         inputs["entry"] = normalize_price(
