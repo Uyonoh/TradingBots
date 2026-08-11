@@ -107,7 +107,7 @@ def start_trade(symbol, args, logger):
     #     "--log-level", args.log_level])
     launch_in_new_window(symbol, args.tp_pips, args.log_level, logger)
 
-def launch_in_new_window(symbol, tp_pips, log_level, logger):
+def launch_in_new_window(symbol, tp_pips, log_level, logger, system=None):
     try:
         subprocess.Popen(
             [
@@ -117,7 +117,7 @@ def launch_in_new_window(symbol, tp_pips, log_level, logger):
                 symbol,
                 "--target", str(tp_pips),
                 "--log-level", log_level
-            ],
+            ] + ([system] if system is not None else []),
             # creationflags=subprocess.CREATE_NEW_CONSOLE  # Open in new console window
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -145,6 +145,16 @@ def main():
     parser.add_argument("--exclude", help="Comma serparated string of excluded magic numbers. These are treated as non-existent")
     parser.add_argument("--preload", action="store_true",
                        help="Load module and await start command for speed up")
+    parser.add_argument(
+        "--foreign",
+        action="store_true",
+        help="Activate foreign order system`",
+    )
+    parser.add_argument(
+        "--alien",
+        action="store_true",
+        help="Activate alien order system`",
+    )
 
     args = parser.parse_args()
     symbol = args.symbol #.upper()

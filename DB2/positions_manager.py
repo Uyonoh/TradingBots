@@ -1036,7 +1036,7 @@ class PositionManager:
                 self.delete_order(last_pos.ticket)
                 self.orders_deleted = True
 
-    def run(self):
+    def run(self, args):
 
         last_update_seconds = t_mod.time()
         logged_m = 0
@@ -1076,7 +1076,16 @@ class PositionManager:
 
             # Manage foreign order
             # self.foreign_order(my_pos)
-            self.alien_order(my_pos)
+            # self.alien_order(my_pos)
+
+            if args.foreign:
+                self.logger.info("Setting up foreign order management systems...")
+                self.foreign_order(my_pos)
+            elif args.alien:
+                self.logger.info("Setting up alien order management systems...")
+                self.alien_order(my_pos)
+            else:
+                self.logger.info("Proceeding without foreign or alien orders.")
 
             open_pos = len(my_pos) > 0
 
@@ -1349,6 +1358,16 @@ def main(args_list=None):
         help="Keep manager active with no open positions",
     )
     parser.add_argument(
+        "--foreign",
+        action="store_true",
+        help="Activate foreign order system`",
+    )
+    parser.add_argument(
+        "--alien",
+        action="store_true",
+        help="Activate alien order system`",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -1366,7 +1385,7 @@ def main(args_list=None):
 
     position_manager = PositionManager(symbol, magic_num, args, logger=None)
     try:
-        position_manager.run()
+        position_manager.run(args)
     except KeyboardInterrupt:
         raise KeyboardInterrupt()
     except Exception as e:
