@@ -222,7 +222,7 @@ def main():
                     time.sleep(10 * 60)
                 elif (target_time - now).seconds >= 10 * 60:
                     print("Sleeping for 5 minutes")
-                    tAime.sleep(5 * 60)
+                    time.sleep(5 * 60)
                 elif (target_time - now).seconds >= 3 * 60:
                     print("Sleeping for 1 minute")
                     time.sleep(1 * 60)
