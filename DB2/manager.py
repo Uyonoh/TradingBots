@@ -183,7 +183,7 @@ def main():
     initialize_mt5(symbol, logger)
     logger.info("\tParsing excluded magic numbers...")
     excluded = get_excluded(args, logger)
-    logger.info(f"\tExcluding all of {excluded}.")
+    logger.info(f"\tExcluding all {excluded if excluded != [-1] else 'magic numbers, no checks will be made!'}.")
     logger.info("Initialization successful.")
 
     if args.preload:
