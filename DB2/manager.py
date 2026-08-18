@@ -8,6 +8,7 @@ import logging
 import dotenv
 
 from doublebanger import main as launcher
+from utils import get_system
 
 
 if sys.platform == "linux":
@@ -115,7 +116,9 @@ def start_trade(symbol, args, logger):
 
     # launcher(["dailybanger", symbol, "--target", str(args.tp_pips),
     #     "--log-level", args.log_level])
-    launch_in_new_window(symbol, args.tp_pips, args.log_level, logger)
+
+    system = get_system(args)
+    launch_in_new_window(symbol, args.tp_pips, args.log_level, logger, system)
 
 def launch_in_new_window(symbol, tp_pips, log_level, logger, system=None):
     try:

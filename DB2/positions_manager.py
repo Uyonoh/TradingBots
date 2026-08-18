@@ -1046,6 +1046,7 @@ class PositionManager:
 
         self.positions = my_pos
         self.set_boundaries()
+        logged_system = False
 
         while True:
             # 1. Hardware Efficiency: Sleep to reduce CPU usage
@@ -1079,10 +1080,14 @@ class PositionManager:
             # self.alien_order(my_pos)
 
             if args.foreign:
-                self.logger.info("Setting up foreign order management systems...")
+                if not logged_system:
+                    self.logger.info("Setting up foreign order management systems...")
+                    logged_system = True
                 self.foreign_order(my_pos)
             elif args.alien:
-                self.logger.info("Setting up alien order management systems...")
+                if not logged_system:
+                    self.logger.info("Setting up alien order management systems...")
+                    logged_system = True
                 self.alien_order(my_pos)
             else:
                 self.logger.info("Proceeding without foreign or alien orders.")

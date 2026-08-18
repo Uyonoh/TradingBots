@@ -1,6 +1,6 @@
 import argparse
 import datetime
-from utils import TradingLogger
+from utils import TradingLogger, get_system
 import os
 import sys
 import time
@@ -370,7 +370,8 @@ class TradingBot:
                         magic=self.magic_number,
                     )
                 order_filled = True
-                launch_pos_manager([self.symbol, "--magic", str(self.magic_number), "--max-tp", str(tp_pips)])
+                system = get_system(args)
+                launch_pos_manager([self.symbol, "--magic", str(self.magic_number), "--max-tp", str(tp_pips)] + ([system] if system is not None else []))
 
     def daily_banger(self, args, **kwargs):
         # rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_D1, 0, 1)
@@ -642,7 +643,8 @@ class TradingBot:
             else:
                 print(f"Canceled order no {i + 1} on {level}: {ticket}")
 
-        launch_pos_manager([self.symbol,"--magic", str(self.magic_number), "--max-tp", str(tp_pips), "--entry", str(initial_entry)])
+        system = get_system(args)
+        launch_pos_manager([self.symbol,"--magic", str(self.magic_number), "--max-tp", str(tp_pips), "--entry", str(initial_entry)] + ([system] if system is not None else []))
 
     def __del__(self):
         """Ensures the connection is closed when the object is destroyed."""
@@ -669,6 +671,16 @@ def main(args_list=None):
     parser.add_argument("--target", type=int, default=0, help="Target tp pips")
     parser.add_argument("--breadth", type=int, default=5, help="Spacing from price to daily bangers")
     parser.add_argument("--retrace", type=int, default=0, help="Retrace from entry in opposing direction to previous H1 candle")
+    parser.add_argument(
+        "--foreign",
+        action="store_true",
+        help="Activate foreign order system`",
+    )
+    parser.add_argument(
+        "--alien",
+        action="store_true",
+        help="Activate alien order system`",
+    )
     args = parser.parse_args(args_list)
 
     bot = TradingBot(args.symbol, args.log_level)

@@ -111,3 +111,15 @@ def retry(
             return None
         return wrapper
     return decorator
+
+def get_system(args=None):
+    if args is None:
+        return None
+
+    system = None
+    if args.foreign:
+        system = "--foreign"
+    elif args.alien:
+        system = "--alien"
+
+    return system
