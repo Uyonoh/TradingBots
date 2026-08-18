@@ -47,6 +47,12 @@ def initialize_mt5(symbol, logger):
 def get_excluded(args, logger):
     if not args.exclude:
         return None
+
+    # Return -1 as representative int for *
+    # valid magic numbers should be possitive ints
+    if args.exclude == "*":
+        return [-1]
+
     numbers = args.exclude.split(",")
     try:
         numbers = [int(n.strip()) for n in numbers]
@@ -85,6 +91,10 @@ def check_trades(symbol, logger, excluded_magic:list[int]=None) -> bool:
     # return True if in trade else False
     if not mt5.initialize():
         initialize_mt5(symbol, logger)
+
+    if excluded_magic == [-1]: # Int rep for *
+        logger.info("Skipping check for existing positions and orders...")
+        return False
 
     if excluded_magic is None:
         excluded_magic = [0]
@@ -212,7 +222,7 @@ def main():
                     time.sleep(10 * 60)
                 elif (target_time - now).seconds >= 10 * 60:
                     print("Sleeping for 5 minutes")
-                    time.sleep(5 * 60)
+                    tAime.sleep(5 * 60)
                 elif (target_time - now).seconds >= 3 * 60:
                     print("Sleeping for 1 minute")
                     time.sleep(1 * 60)
