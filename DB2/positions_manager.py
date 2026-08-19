@@ -186,7 +186,7 @@ class PositionManager:
 
 
 
-        self.foreign_tp_pips = (self.max_tp / 2) + (max(self.stop_levels * 2, self.spread)) # Extra padding
+        self.foreign_tp_pips = (self.max_tp / 2) + (max(self.stop_levels * 2, self.spread * 2.5)) # Extra padding
 
         self.logger.info(f"{self.max_tp=}")
         self.logger.info(f"{self.foreign_tp_pips=}")
@@ -502,6 +502,7 @@ class PositionManager:
         spread = self.last_ask - self.last_bid
         position_type = mt5.POSITION_TYPE_BUY if direction.lower() == "buy" else mt5.POSITION_TYPE_SELL
         multiplier = 1 if direction.lower() == "buy" else -1
+        self.logger.info(f"CALCULATE {direction}s")
         for pos in positions:
             if pos.ticket == self.foreign_ticket:
                 continue
@@ -517,14 +518,20 @@ class PositionManager:
 
             if direction.lower() == "buy":
                 if pos.type == mt5.POSITION_TYPE_BUY:
-                    pnl += ((self.boundaries[0] - pos.price_open) / self.contract_size) * pos.volume
+                    p = ((self.boundaries[0] - pos.price_open) / self.contract_size) * pos.volume
+                    pnl += p
                 else:
-                    pnl -= ((self.boundaries[0] - pos.price_open) / self.contract_size) * pos.volume
+                    p = ((self.boundaries[0] - pos.price_open) / self.contract_size) * pos.volume
+                    pnl -= p
             else:
                 if pos.type == mt5.POSITION_TYPE_SELL:
-                    pnl += ((pos.price_open - self.boundaries[1]) / self.contract_size) * pos.volume
+                    p = ((pos.price_open - self.boundaries[1]) / self.contract_size) * pos.volume
+                    pnl += p
                 else:
-                    pnl -= ((pos.price_open - self.boundaries[1]) / self.contract_size) * pos.volume
+                    p = ((pos.price_open - self.boundaries[1]) / self.contract_size) * pos.volume
+                    pnl -= p
+
+            self.logger.info(f"\t{pos.volume} at {pos.price_open} = {p}")
 
 
         return round(pnl, 2)
