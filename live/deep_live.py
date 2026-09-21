@@ -571,6 +571,47 @@ CONFIG = {
     }
 }
 
+CONFIG = {
+    "bias_filter": {"buy_threshold": 0.6589, "sell_threshold": 0.3173},
+    "entry_conditions": {
+        "buffer_pips": 5,
+        "velocity_multiplier": 1.9501,
+        "lookback_seconds": 60*60,
+        "price_change_threshold": 5,
+        "tick_loockback": 490,
+    },
+    "risk_management": {
+        "initial_sl_pips": 60,
+        "trailing_stages": [
+            {"min_profit": 0, "max_profit": np.int64(27), "retention": -1},
+            {"min_profit": np.int64(27), "max_profit": np.int64(54), "retention": 0.48},
+            {"min_profit": np.int64(54), "max_profit": np.int64(81), "retention": 0.53},
+            {"min_profit": np.int64(81), "max_profit": np.int64(108), "retention": 0.59},
+            {"min_profit": np.int64(108), "max_profit": np.int64(135), "retention": 0.64},
+            {"min_profit": np.int64(135), "max_profit": np.int64(162), "retention": 0.69,},
+            {"min_profit": np.int64(162), "retention": 0.95},
+        ],
+    },
+    'session': {
+        'pre-trading': 1, # Hours
+        'day_open': '08:30',
+        'trading_start': '08:33',
+        'trading_end': '14:03',
+        'ghost_start': '06:09',
+        'ghost_end': '06:12'
+    },
+    'logging': {
+        'level': 'INFO',
+        'enable_file_logging': True
+    },
+    'performance': {
+        'tick_processing_interval': 0.1,  # seconds
+        'velocity_update_interval': 1.0,  # seconds
+        'position_check_interval': 2.0,   # seconds
+        'outside_session_sleep': 60.0     # seconds when outside trading hours
+    }
+}
+
 # Global instances
 logger = None
 connection_manager = None
@@ -610,10 +651,11 @@ class OptimizedVelocityMonitor:
     Optimized velocity monitor with efficient data structures and calculations.
     """
     
-    def __init__(self, symbol: str, lookback_seconds: int = 60):
+    def __init__(self, symbol: str, lookback_seconds: int = 60, history_len: int = 50, change_threshold: int = 500):
         self.symbol = symbol
-        self.tick_history = deque(maxlen=50)
-        self.min_pip_threshold = 5 # Min pip movement within tick hist in biased direcion
+        self.tick_history = deque(maxlen=history_len)
+        self.min_hist_len = history_len
+        self.min_pip_threshold = change_threshold # Min pip movement within tick hist in biased direcion
 
         self.tick_timestamps = deque(maxlen=3000)  # Limit memory usage (100 ticks/second * 30 seconds)
         self.density_history = deque(maxlen=lookback_seconds)
@@ -756,9 +798,14 @@ class OptimizedVelocityMonitor:
         return is_high
     
     def velocity_bias(self, contract_size=1):
-        """ Gets the biasof price based on n ticks in history """
+        """ Gets the bias of price based on n ticks in history """
 
         history = [(t["ask"] + t["bid"]) / 2 for t in self.tick_history]
+        
+        # History should be at least this long
+        if len(history) < self.min_hist_len:
+            return "straddle"
+
         hist_sum = (history - history[0]).sum()
         if (hist_sum * contract_size) > self.min_pip_threshold:
             bias = "buy"
@@ -1308,7 +1355,7 @@ def main():
 
     # Initialize state and monitoring
     state = OptimizedStrategyState(symbol)
-    velocity = OptimizedVelocityMonitor(symbol, CONFIG['entry_conditions']['lookback_seconds'])
+    velocity = OptimizedVelocityMonitor(symbol, CONFIG['entry_conditions']['lookback_seconds'], CONFIG['entry_conditions']['tick_loockback'], CONFIG['entry_conditions']['price_change_threshold'])
     
     logger.info("Optimized trading started")
     
