@@ -596,7 +596,7 @@ CONFIG = {
         'pre-trading': 1, # Hours
         'day_open': '08:30',
         'trading_start': '08:33',
-        'trading_end': '14:03',
+        'trading_end': '20:03',
         'ghost_start': '06:09',
         'ghost_end': '06:12'
     },
@@ -671,6 +671,21 @@ class OptimizedVelocityMonitor:
         self._tick_buffer = np.zeros(10000, dtype=np.float64)
         self._buffer_size = 0
 
+    def log_ticks(self, ticks: list[Any] = None):
+        if ticks is not None and len(ticks) > 0:
+            # 2. Convert the structured NumPy array straight into a pandas DataFrame
+            df = pd.DataFrame(ticks)
+            
+            # 3. Vectorized filtering (orders of magnitude faster than a Python loop)
+            # cutoff_msc = server_time.timestamp() * 1000
+            # df = df[df['time_msc'] > cutoff_msc]
+            
+            # 4. Efficiently log to CSV
+            csv_file = f"logs/{self.symbol}_ticks_log.csv"
+            file_exists = os.path.isfile(csv_file)
+            
+            df.to_csv(csv_file, mode='a', index=False, header=not file_exists)
+
     def get_server_timestamp(self) -> Optional[float]:
         """Get current server timestamp efficiently."""
         tick = mt5.symbol_info_tick(self.symbol)
@@ -696,6 +711,7 @@ class OptimizedVelocityMonitor:
             return np.array([])
         
         # Store history
+        self.log_ticks(ticks)
         self.tick_history.extend(ticks)
 
         # Extract timestamps efficiently using numpy
@@ -716,6 +732,7 @@ class OptimizedVelocityMonitor:
             return np.array([])
         
         # Store history
+        self.log_ticks(ticks)
         self.tick_history.extend(ticks)
 
         # Update density
