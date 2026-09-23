@@ -1024,7 +1024,10 @@ def calculate_daily_bias(symbol: str) -> str:
     """
     logger = logging.getLogger("trading_bot.bias")
     
-    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 1, 1)
+    yesterday = datetime.now() - timedelta(days=1)
+    
+    # Fetch 1 bar counting backwards from yesterday's timestamp
+    rates = mt5.copy_rates_from(symbol, mt5.TIMEFRAME_D1, yesterday, 1)
     if rates is None or len(rates) == 0:
         error = mt5.last_error()
         raise MT5OperationError(f"Error fetching D1 data for {symbol}: {error}")
