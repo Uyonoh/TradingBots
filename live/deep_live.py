@@ -1462,6 +1462,14 @@ def main():
             server_tz = TimeCache.get_timezone(server_time.date())
             server_time = server_tz.localize(server_time) if server_time.tzinfo is None else server_time.astimezone(server_tz)
             
+            # Check if we're past Mandatory Close (Time)
+            if server_time >= session_times['session_end']:
+                # Only try to close if were currently in a trade
+                if state.in_trade:
+                    logger.info(f"Mandatory close triggered at {server_time}")
+                    safe_mt5_call(close_positions, symbol)
+                    continue
+                
             # Check if we're into pretrading hours
             if not session_time_manager.is_in_pretrading_hours(server_time):
                 # Outside trading hours - sleep longer
@@ -1540,12 +1548,6 @@ def main():
             # Handle open positions
             if state.in_trade and my_pos:
                 pos = my_pos[0]
-                
-                # Mandatory Close (Time)
-                if server_time >= session_times['session_end']:
-                    logger.info(f"Mandatory close triggered: {server_time}")
-                    safe_mt5_call(close_positions, symbol)
-                    continue
                 
                 # Trailing Stop Logic
                 if pos.type == mt5.ORDER_TYPE_BUY:
