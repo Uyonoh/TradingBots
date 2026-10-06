@@ -752,8 +752,9 @@ class OptimizedVelocityMonitor:
         self.tick_history.extend(ticks)
 
         # Extract timestamps efficiently using numpy
+        # All timestamps are after servertime, return all
         timestamps = ticks['time_msc'] / 1000.0
-        return timestamps[1:] if len(timestamps) > 1 else timestamps
+        return timestamps
     
     def get_ticks_range(self, server_time=None):
         if server_time is None:
@@ -781,7 +782,7 @@ class OptimizedVelocityMonitor:
 
         # Extract timestamps efficiently using numpy
         timestamps = ticks['time_msc'] / 1000.0
-        return timestamps[1:] if len(timestamps) > 1 else timestamps
+        return timestamps
 
     def on_tick(self) -> None:
         """Process new ticks efficiently."""
