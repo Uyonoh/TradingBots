@@ -855,13 +855,14 @@ class OptimizedVelocityMonitor:
     def velocity_bias(self, contract_size=1):
         """ Gets the bias of price based on n ticks in history """
 
-        history = [(t["ask"] + t["bid"]) / 2 for t in self.tick_history]
+        history = np.asarray([(t["ask"] + t["bid"]) / 2 for t in self.tick_history])
         
         # History should be at least this long
         if len(history) < self.min_hist_len:
             return "straddle"
 
-        hist_sum = (history - history[0]).sum()
+        #hist_sum = (history - history[0]).sum()
+        hist_sum = (history[1:] - history[:-1]).sum()
         if (hist_sum * contract_size) > self.min_pip_threshold:
             bias = "buy"
         elif (hist_sum * contract_size) < (self.min_pip_threshold * -1):
@@ -875,11 +876,17 @@ class OptimizedVelocityMonitor:
     
     def get_current_metrics(self) -> Dict[str, float]:
         """Get current velocity metrics for monitoring."""
+
+        history = np.asarray([(t["ask"] + t["bid"]) / 2 for t in self.tick_history])
+        hist_sum = (history[1:] - history[:-1]).sum()
+
         return {
             'current_density': len(self.tick_timestamps) / 30.0,
             'avg_density': self.density_sum / max(len(self.density_history), 1),
             'history_size': len(self.density_history),
-            'ticks_count': len(self.tick_timestamps)
+            'ticks_count': len(self.tick_timestamps),
+            'history_count': len(self.tick_history),
+            'history_sum': hist_sum,
         }
     
     def reset(self):
