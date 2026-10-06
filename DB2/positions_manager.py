@@ -1097,7 +1097,9 @@ class PositionManager:
                     logged_system = True
                 self.alien_order(my_pos)
             else:
-                self.logger.info("Proceeding without foreign or alien orders.")
+                if not logged_system:
+                    self.logger.info("Proceeding without foreign or alien orders.")
+                    logged_system = True
 
             open_pos = len(my_pos) > 0
 
