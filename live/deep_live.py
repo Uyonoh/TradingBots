@@ -748,7 +748,7 @@ class OptimizedVelocityMonitor:
             return np.array([])
         
         # Store history
-        self.log_ticks(ticks)
+        #self.log_ticks(ticks)
         self.tick_history.extend(ticks)
 
         # Extract timestamps efficiently using numpy
@@ -769,7 +769,7 @@ class OptimizedVelocityMonitor:
             return np.array([])
         
         # Store history
-        self.log_ticks(ticks)
+        #self.log_ticks(ticks)
         self.tick_history.extend(ticks)
 
         # Update density
