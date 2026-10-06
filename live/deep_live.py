@@ -599,18 +599,55 @@ CONFIG = {
         'trading_end': '20:03',
         'ghost_start': '06:09',
         'ghost_end': '06:12'
-    },
-    'logging': {
+    }}
+
+
+
+
+
+
+CONFIG = {'bias_filter': {'enabled': True,
+                            'buy_threshold': 0.659134602702738,
+                            'sell_threshold': 0.3598001013743884},
+           'entry_conditions': {'buffer_pips': 17,
+                                  'velocity_multiplier': 2.0440046667408294,
+                                  'lookback_seconds': '3600S',
+                                  'price_change_threshold': 50,
+                                  'tick_loockback': 260},
+           'risk_management': {'initial_sl_pips': [100, 100],
+                                 'trailing_stages': [{'min_profit': 0, 'max_profit': 36, 'retention': -1},
+                                                        {'min_profit': 36, 'max_profit': 72, 'retention': 0.7},
+                                                        {'min_profit': 72, 'retention': 0.95}]},
+           'session_constraints': {'day_open': '08:30',
+                                     'entry_start': '08:47',
+                                     'mandatory_close': '19:47',
+                                     'ghost_open': '06:15',
+                                     'ghost_close': '06:48'}}
+
+CONFIG = {'bias_filter': {'enabled': True, 'buy_threshold': 0.6455151418406098, 'sell_threshold': 0.4926398931530179}, 'entry_conditions': {'buffer_pips': 14, 'velocity_multiplier': 1.972820694959165, 'lookback_seconds': '3600S', 'price_change_threshold': 35, 'tick_loockback': 420}, 'risk_management': {'initial_sl_pips': [100, 100], 'trailing_stages': [{'min_profit': 0, 'max_profit': 37, 'retention': -1}, {'min_profit': 37, 'max_profit': 74, 'retention': 0.74}, {'min_profit': 74, 'max_profit': 111, 'retention': 0.81}, {'min_profit': 111, 'max_profit': 148, 'retention': 0.88}, {'min_profit': 148, 'max_profit': 185, 'retention': 0.95}, {'min_profit': 185, 'max_profit': 222, 'retention': 0.95}, {'min_profit': 222, 'max_profit': 259, 'retention': 0.95}, {'min_profit': 259, 'max_profit': 296, 'retention': 0.95}, {'min_profit': 296, 'retention': 0.95}]}, 'session_constraints': {'day_open': '07:30', 'entry_start': '07:44', 'mandatory_close': '13:44', 'ghost_open': '05:27', 'ghost_close': '05:40'}}
+
+CONFIG['session'] = {}
+CONFIG['session']['pre-trading'] =   1
+CONFIG['session']['day_open'] =      CONFIG['session_constraints']['day_open']
+CONFIG['session']['trading_start'] = CONFIG['session_constraints']['entry_start']
+CONFIG['session']['trading_end'] =   CONFIG['session_constraints']['mandatory_close']
+CONFIG['session']['ghost_start'] =   CONFIG['session_constraints']['ghost_open']
+CONFIG['session']['ghost_end'] =     CONFIG['session_constraints']['ghost_close']
+CONFIG['risk_management']['initial_sl_pips'] = CONFIG['risk_management']['initial_sl_pips'][0]
+CONFIG['entry_conditions']['lookback_seconds'] =    60 * 60
+
+CONFIG['logging'] =  {
         'level': 'INFO',
         'enable_file_logging': True
-    },
-    'performance': {
+    }
+
+CONFIG['performance'] = {
         'tick_processing_interval': 0.1,  # seconds
         'velocity_update_interval': 1.0,  # seconds
         'position_check_interval': 2.0,   # seconds
         'outside_session_sleep': 60.0     # seconds when outside trading hours
     }
-}
+
 
 # Global instances
 logger = None
