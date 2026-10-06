@@ -1290,10 +1290,10 @@ def execute_trade_with_cache(
 
 
 @retry(max_attempts=2, delay=1.0, exceptions=(OrderExecutionError,), logger=logger)
-def modify_sl(self, ticket, new_sl):
+def modify_sl(symbol, ticket, new_sl, logger):
         request = {
             "action": mt5.TRADE_ACTION_SLTP,
-            "symbol": self.symbol,
+            "symbol": symbol,
             "position": ticket,
             "sl": new_sl,
             "magic": MAGIC_NUM
@@ -1302,7 +1302,7 @@ def modify_sl(self, ticket, new_sl):
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             raise OrderExecutionError(f"SL modification Failed: {result.comment} (retcode: {result.retcode})")
 
-        self.logger.info(f"Modified sl to {new_sl:.2f}")
+        logger.info(f"Modified sl to {new_sl:.2f}")
 
 @retry(max_attempts=3, delay=1.0, exceptions=(OrderExecutionError,), logger=logger)
 def close_positions(symbol):
@@ -1570,7 +1570,7 @@ def main():
                             new_sl = pos.price_open - trail_dist
                             should_modify = (pos.sl == 0 or new_sl < pos.sl)
                         if should_modify:
-                            safe_mt5_call(modify_sl, symbol, pos.ticket, new_sl=new_sl)
+                            safe_mt5_call(modify_sl, symbol, pos.ticket, new_sl=new_sl, logger=logger)
                             break
             
             # Entry Logic
