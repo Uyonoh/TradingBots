@@ -954,6 +954,7 @@ class OptimizedStrategyState:
     def __init__(self, symbol: str):
         self.symbol = symbol
         self.current_date = None
+        self.last_date = None
         self.bias = "straddle"
         self.ghost_high = None
         self.ghost_low = None
@@ -975,6 +976,7 @@ class OptimizedStrategyState:
     def reset(self, new_date: date) -> None:
         """Reset state for a new trading day."""
         self.logger.info(f"--- NEW DAY: {new_date} ---")
+        self.last_date = self.current_date
         self.current_date = new_date
         self.bias = "straddle"
         self.ghost_high = None
@@ -986,6 +988,9 @@ class OptimizedStrategyState:
         self.entry_price = 0.0
         self.direction = None
         self._buffer_cache.clear()
+
+        if (self.last_date is not None) and (self.last_date.date() == self.current_date.date()):
+            self.logger.error(f"Reset Error: Current and last date are [{self.last_date.date()}]")
         self.logger.debug(f"State reset for {new_date}")
 
     def close_trade(self) -> None:
@@ -1079,26 +1084,30 @@ class OptimizedStrategyState:
 # -------------------------------------------------------------------
 # OPTIMIZED CORE LOGIC
 # -------------------------------------------------------------------
-@retry(max_attempts=2, delay=1.0, exceptions=(MT5OperationError,), logger=logger)
-def calculate_daily_bias(symbol: str) -> str:
+@retry(max_attempts=5, delay=30.0, exceptions=(MT5OperationError,), logger=logger)
+def calculate_daily_bias(state) -> str:
     """
     Optimized daily bias calculation.
     """
     logger = logging.getLogger("trading_bot.bias")
     
     yesterday = datetime.now() - timedelta(days=1)
+
+    if (state.last_date is not None) and (yesterday.date() != state.last_date.date()):
+        logger.error(f"Error getting daily bias: bias will be calculated for {yesterday.date()} instead of {state.last_date.date()}")
+        raise ValueError("Invalid date fetched for bias")
     
     # Fetch 1 bar counting backwards from yesterday's timestamp
-    rates = mt5.copy_rates_from(symbol, mt5.TIMEFRAME_D1, yesterday, 1)
+    rates = mt5.copy_rates_from(state.symbol, mt5.TIMEFRAME_D1, yesterday, 1)
     if rates is None or len(rates) == 0:
         error = mt5.last_error()
-        raise MT5OperationError(f"Error fetching D1 data for {symbol}: {error}")
+        raise MT5OperationError(f"Error fetching D1 data for {state.symbol}: {error}")
 
     r = rates[0]
     high, low, close = r['high'], r['low'], r['close']
     
     if high == low:
-        logger.warning(f"D1 candle has high=low for {symbol}")
+        logger.warning(f"D1 candle has high=low for {state.symbol}")
         return "straddle"
     
     rc = (close - low) / (high - low)
@@ -1462,16 +1471,15 @@ def main():
             server_tz = TimeCache.get_timezone(server_time.date())
             server_time = server_tz.localize(server_time) if server_time.tzinfo is None else server_time.astimezone(server_tz)
             
-            # Check if we're past Mandatory Close (Time)
-            if server_time >= session_times['session_end']:
+            # Check if we're into pretrading hours
+            if not session_time_manager.is_in_pretrading_hours(server_time):
+                # Close open trades when we exit trading hours
                 # Only try to close if were currently in a trade
                 if state.in_trade:
                     logger.info(f"Mandatory close triggered at {server_time}")
                     safe_mt5_call(close_positions, symbol)
                     continue
-                
-            # Check if we're into pretrading hours
-            if not session_time_manager.is_in_pretrading_hours(server_time):
+
                 # Outside trading hours - sleep longer
                 logger.debug(f"Outside pre-trading hours: {server_time}")
                 t_mod.sleep(outside_session_sleep)
@@ -1484,7 +1492,7 @@ def main():
                 state.reset(today_date)
                 velocity.reset()
                 logger = trading_logger.reset_logger()
-                bias = safe_mt5_call(calculate_daily_bias, symbol)
+                bias = safe_mt5_call(calculate_daily_bias, state)
                 if bias is not None:
                     state.bias = bias
                     logger.info(f"Daily bias set to: {state.bias}")
