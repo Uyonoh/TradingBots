@@ -1022,13 +1022,13 @@ class OptimizedStrategyState:
         self.direction = None
         self._buffer_cache.clear()
 
-        if (self.last_date is not None) and (self.last_date.date() == self.current_date.date()):
-            self.logger.error(f"Reset Error: Current and last date are [{self.last_date.date()}]")
+        if (self.last_date is not None) and (self.last_date == self.current_date):
+            self.logger.error(f"Reset Error: Current and last date are [{self.last_date}]")
         self.logger.debug(f"State reset for {new_date}")
 
     def close_trade(self) -> None:
         """Clean up trade state after position closure."""
-        self.logger.info(f"Trade closed. Bias: {self.bias}")
+        self.logger.info(f"Trade closed")
         self.touched_opposite = False
         self.in_trade = False
         self.max_pnl = 0.0
@@ -1049,8 +1049,9 @@ class OptimizedStrategyState:
     
     def check_opposite_lookback(self, target, start_time):
         today = datetime.now()
-        start_dt = datetime.combine(today.date(), start_time)
-        end_dt = today
+        SERVER_TIMEZONE = TimeCache.get_timezone(today.date())
+        start_dt = SERVER_TIMEZONE.localize(datetime.combine(today.date(), start_time))
+        end_dt = DateTimeUtils.UTC.localize(today)
 
         zones = {
             DateTimeUtils.UTC2: 2,
@@ -1063,14 +1064,16 @@ class OptimizedStrategyState:
         start_dt = to_mt5_time(start_dt)
         end_dt = to_mt5_time(end_dt)
         
+        self.logger.info(f"Checking opposite contacts from Start: {start_dt}, End: {end_dt}")
         rates = mt5.copy_rates_range(self.symbol, mt5.TIMEFRAME_M1, start_dt, end_dt)
         if rates is None or len(rates) == 0:
             self.logger.error(f"Error fetching M1 data for opposite confirmation: {mt5.last_error()}")
+            self.logger.error(f"Start: {start_dt}, End: {end_dt}")
             return False
 
         for r in rates:
             high, low, dts = r['high'], r['low'], r['time']
-            dt = datetime.fromtimestamp(dts) - timedelta(hours=zones[server_zone] - offset)
+            dt = datetime.fromtimestamp(dts) #- timedelta(hours=zones[server_zone] - offset)
 
             if self.bias == "buy":
                 if low <= target:
@@ -1117,6 +1120,16 @@ class OptimizedStrategyState:
 # -------------------------------------------------------------------
 # OPTIMIZED CORE LOGIC
 # -------------------------------------------------------------------
+def to_mt5_time(dt: datetime, zone=None) -> datetime:
+    """Convert local server time to UTC for MT5 functions."""
+    SERVER_TIMEZONE = TimeCache.get_timezone(dt.date())
+    if dt.tzinfo is None or zone == "local":
+        # Assuming dt is in local timezone
+        dt = DateTimeUtils.LOCAL_TIME.localize(dt)
+    # Convert to servertime and replace tz with utc so the epoch times register correctly
+    dt = dt.astimezone(SERVER_TIMEZONE).replace(tzinfo=timezone.utc)
+    return dt
+
 @retry(max_attempts=5, delay=30.0, exceptions=(MT5OperationError,), logger=logger)
 def calculate_daily_bias(state) -> str:
     """
@@ -1124,13 +1137,14 @@ def calculate_daily_bias(state) -> str:
     """
     logger = logging.getLogger("trading_bot.bias")
     
-    yesterday = datetime.now() - timedelta(days=1)
+    yesterday = to_mt5_time(datetime.now() - timedelta(days=1))
 
-    if (state.last_date is not None) and (yesterday.date() != state.last_date.date()):
-        logger.error(f"Error getting daily bias: bias will be calculated for {yesterday.date()} instead of {state.last_date.date()}")
-        raise ValueError("Invalid date fetched for bias")
+    if (state.last_date is not None) and (yesterday.date() != state.last_date):
+        logger.error(f"Error getting daily bias: bias will be calculated on {yesterday.date()} instead of {state.last_date}")
+        # raise ValueError("Invalid date fetched for bias")
     
     # Fetch 1 bar counting backwards from yesterday's timestamp
+    logger.debug(f"Copying daily rates from {yesterday}")
     rates = mt5.copy_rates_from(state.symbol, mt5.TIMEFRAME_D1, yesterday, 1)
     if rates is None or len(rates) == 0:
         error = mt5.last_error()
@@ -1153,16 +1167,6 @@ def calculate_daily_bias(state) -> str:
     
     logger.info(f"Daily bias: {bias} (rc={rc:.3f})")
     return bias
-
-def to_mt5_time(dt: datetime) -> datetime:
-    """Convert local server time to UTC for MT5 functions."""
-    SERVER_TIMEZONE = TimeCache.get_timezone(dt.date())
-    if dt.tzinfo is None:
-        # Assuming dt is in local timezone
-        dt = DateTimeUtils.LOCAL_TIME.localize(dt)
-    # Convert to servertime and replace tz with utc so the epoch times register correctly
-    dt = dt.astimezone(SERVER_TIMEZONE).replace(tzinfo=timezone.utc)
-    return dt
 
 
 @retry(max_attempts=2, delay=1.0, exceptions=(MT5OperationError,), logger=logger)
@@ -1542,8 +1546,15 @@ def main():
             if state.current_date != today_date:
                 state.reset(today_date)
                 velocity.reset()
+
                 logger = trading_logger.reset_logger()
                 bias = safe_mt5_call(calculate_daily_bias, state)
+                
+                # Trying to combat wrong reads
+                t_mod.sleep(5*60)
+                state.reset(today_date)
+                bias = safe_mt5_call(calculate_daily_bias, state)
+
                 if bias is not None:
                     state.bias = bias
                     logger.info(f"Daily bias set to: {state.bias}")
