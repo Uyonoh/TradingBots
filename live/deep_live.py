@@ -229,7 +229,7 @@ class SessionTimeManager:
         # Helper function to create localized datetime
         def make_dt(t: str) -> datetime:
             format = "%H:%M"
-            base_tz = DateTimeUtils.UTC1 # TZ base for time
+            base_tz = DateTimeUtils.CET # TZ base for time
             tz= DateTimeUtils.LOCAL_TIME # Return tz
             t = datetime.strptime(t, format).time()
             dt = DateTimeUtils.combine_date_time(for_date, t, base_tz)
