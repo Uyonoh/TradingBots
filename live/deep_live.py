@@ -16,6 +16,7 @@ from typing import Optional, Dict, Any, List, Tuple, Callable, Union
 from functools import wraps, lru_cache
 from dataclasses import dataclass
 from enum import Enum
+from decimal import Decimal, ROUND_DOWN
 
 if sys.platform == "linux":
     from mt5linux import MetaTrader5
@@ -1295,8 +1296,20 @@ def execute_trade_with_cache(
         raise OrderExecutionError(f"Order failed: {result.comment} (retcode: {result.retcode})")
     
     logger.info(f"Trade executed: {direction} at {result.price:.5f}, ticket: {result.order}")
+
+    # Sleep to prevent duplicates
+    t_mod.sleep(1)
+
     return True, result.price
 
+def truncate_decimal(number, places):
+        # Convert to string first to maintain accuracy
+        dec = Decimal(str(number))
+                
+        # Create the pattern matching your desired decimal places (e.g., '0.01' for 2 places)
+        pattern = Decimal('10') ** -places
+
+        return dec.quantize(pattern, rounding=ROUND_DOWN)
 
 @retry(max_attempts=2, delay=1.0, exceptions=(OrderExecutionError,), logger=logger)
 def modify_sl(symbol, ticket, new_sl, logger):
@@ -1422,8 +1435,9 @@ def main():
         connection_manager.shutdown()
         sys.exit(1)
     
+    digits = info["digits"]
     contract_size = info['contract_size']
-    logger.info(f"Symbol {symbol} loaded, contract size: {contract_size}")
+    logger.info(f"Symbol {symbol} loaded, contract size: {contract_size}, digits: {digits}")
     logger.info(f"Session hours: {CONFIG['session']['trading_start']} - "
                 f"{CONFIG['session']['trading_end']}")
 
@@ -1574,10 +1588,10 @@ def main():
                         trail_dist = state.max_pnl * stage['retention'] / contract_size
                         
                         if pos.type == mt5.ORDER_TYPE_BUY:
-                            new_sl = pos.price_open + trail_dist
+                            new_sl = truncate_decimal(pos.price_open + trail_dist, digits)
                             should_modify = (pos.sl == 0 or new_sl > pos.sl)
                         else:
-                            new_sl = pos.price_open - trail_dist
+                            new_sl = truncate_decimal(pos.price_open - trail_dist, digits)
                             should_modify = (pos.sl == 0 or new_sl < pos.sl)
                         if should_modify:
                             safe_mt5_call(modify_sl, symbol, pos.ticket, new_sl=new_sl, logger=logger)
