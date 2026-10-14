@@ -625,7 +625,32 @@ CONFIG = {'bias_filter': {'enabled': True,
                                      'ghost_open': '06:15',
                                      'ghost_close': '06:48'}}
 
-CONFIG = {'bias_filter': {'enabled': True, 'buy_threshold': 0.6455151418406098, 'sell_threshold': 0.4926398931530179}, 'entry_conditions': {'buffer_pips': 14, 'velocity_multiplier': 1.972820694959165, 'lookback_seconds': '3600S', 'price_change_threshold': 35, 'tick_loockback': 420}, 'risk_management': {'initial_sl_pips': [100, 100], 'trailing_stages': [{'min_profit': 0, 'max_profit': 37, 'retention': -1}, {'min_profit': 37, 'max_profit': 74, 'retention': 0.74}, {'min_profit': 74, 'max_profit': 111, 'retention': 0.81}, {'min_profit': 111, 'max_profit': 148, 'retention': 0.88}, {'min_profit': 148, 'max_profit': 185, 'retention': 0.95}, {'min_profit': 185, 'max_profit': 222, 'retention': 0.95}, {'min_profit': 222, 'max_profit': 259, 'retention': 0.95}, {'min_profit': 259, 'max_profit': 296, 'retention': 0.95}, {'min_profit': 296, 'retention': 0.95}]}, 'session_constraints': {'day_open': '07:30', 'entry_start': '07:44', 'mandatory_close': '13:44', 'ghost_open': '05:27', 'ghost_close': '05:40'}}
+CONFIG = {'bias_filter': {'enabled': True, 'buy_threshold': 0.5455151418406098, 'sell_threshold': 0.4926398931530179}, 'entry_conditions': {'buffer_pips': 14, 'velocity_multiplier': 1.972820694959165, 'lookback_seconds': '3600S', 'price_change_threshold': 15, 'tick_loockback': 420}, 'risk_management': {'initial_sl_pips': [100, 100], 'trailing_stages': [{'min_profit': 0, 'max_profit': 37, 'retention': -1}, {'min_profit': 37, 'max_profit': 74, 'retention': 0.74}, {'min_profit': 74, 'max_profit': 111, 'retention': 0.81}, {'min_profit': 111, 'max_profit': 148, 'retention': 0.88}, {'min_profit': 148, 'max_profit': 185, 'retention': 0.95}, {'min_profit': 185, 'max_profit': 222, 'retention': 0.95}, {'min_profit': 222, 'max_profit': 259, 'retention': 0.95}, {'min_profit': 259, 'max_profit': 296, 'retention': 0.95}, {'min_profit': 296, 'retention': 0.95}]}, 'session_constraints': {'day_open': '07:30', 'entry_start': '07:44', 'mandatory_close': '13:44', 'ghost_open': '05:27', 'ghost_close': '05:40'}}
+
+CONFIG = {'bias_filter': {'enabled': True,
+                            'buy_threshold': 0.5593982605738395,
+                            'sell_threshold': 0.49108685855107465},
+           'entry_conditions': {'buffer_pips': 19,
+                                  'velocity_multiplier': 1.9486235513749763,
+                                  'lookback_seconds': '3600S',
+                                  'price_change_threshold': 35,
+                                  'tick_loockback': 420},
+           'risk_management': {'initial_sl_pips': [100, 100],
+                                 'trailing_stages': [{'min_profit': 0, 'max_profit': 35, 'retention': -1},
+                                                        {'min_profit': 35, 'max_profit': 70, 'retention': 0.76},
+                                                        {'min_profit': 70, 'max_profit': 105, 'retention': 0.83},
+                                                        {'min_profit': 105, 'max_profit': 140, 'retention': 0.9},
+                                                        {'min_profit': 140, 'max_profit': 175, 'retention': 0.95},
+                                                        {'min_profit': 175, 'max_profit': 210, 'retention': 0.95},
+                                                        {'min_profit': 210, 'max_profit': 245, 'retention': 0.95},
+                                                        {'min_profit': 245, 'max_profit': 280, 'retention': 0.95},
+                                                        {'min_profit': 280, 'max_profit': 315, 'retention': 0.95},
+                                                        {'min_profit': 315, 'retention': 0.95}]},
+           'session_constraints': {'day_open': '07:30',
+                                     'entry_start': '07:53',
+                                     'mandatory_close': '13:53',
+                                     'ghost_open': '05:31',
+                                     'ghost_close': '05:43'}}
 
 CONFIG['session'] = {}
 CONFIG['session']['pre-trading'] =   1
@@ -636,6 +661,13 @@ CONFIG['session']['ghost_start'] =   CONFIG['session_constraints']['ghost_open']
 CONFIG['session']['ghost_end'] =     CONFIG['session_constraints']['ghost_close']
 CONFIG['risk_management']['initial_sl_pips'] = CONFIG['risk_management']['initial_sl_pips'][0]
 CONFIG['entry_conditions']['lookback_seconds'] =    60 * 60
+
+
+#CONFIG['session']['day_open'] =      '4:00'
+#CONFIG['session']['trading_start'] = '4:00'
+#CONFIG['session']['trading_end'] =   '22:00'
+#CONFIG['session']['ghost_start'] =   '3:30'
+#CONFIG['session']['ghost_end'] =     '4:00'
 
 CONFIG['logging'] =  {
         'level': 'INFO',
@@ -1280,7 +1312,7 @@ def execute_trade_with_cache(
         "sl": sl_price,
         "deviation": DEVIATION,
         "magic": MAGIC_NUM,
-        "comment": f"DEEP_{sys.platform} bot",
+        "comment": f"DEEP_{sys.platform} bot {datetime.now()}",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling,
     }
@@ -1330,6 +1362,11 @@ def modify_sl(symbol, ticket, new_sl, logger):
 def close_positions(symbol):
     """Closes all positions with our Magic Number"""
     positions = safe_mt5_call(mt5.positions_get, symbol)
+
+    if positions is None:
+        logger.info("No open positions found")
+        return
+
     for pos in positions:
         if pos.magic == MAGIC_NUM:
             tick = mt5.symbol_info_tick(symbol)
