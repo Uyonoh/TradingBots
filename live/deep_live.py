@@ -1270,23 +1270,26 @@ def execute_trade_with_cache(
     if validation_errors:
         for error in validation_errors:
             logger.error(f"Order validation failed: {error}")
-        return False, 0.0
+        return False, None
     
     # Get tick
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         error = mt5.last_error()
-        raise OrderExecutionError(f"Cannot get tick for {symbol}: {error}")
+        logger.error(f"Cannot get tick for {symbol}: {error}")
+        return False, None
     
     # Get symbol info
     info = symbol_info_cache.get_info()
     if info is None:
-        raise OrderExecutionError(f"Cannot get symbol info for {symbol}")
+        logger.error(f"Cannot get symbol info for {symbol}")
+        return False, None
     
     # Get filling type
     filling = get_filling_type_from_cache(symbol_info_cache)
     if filling is None:
-        raise OrderExecutionError(f"Cannot determine filling type for {symbol}")
+        logger.error(f"Cannot determine filling type for {symbol}")
+        return False, None
     
     # Calculate prices
     contract_size = info['contract_size']
@@ -1326,10 +1329,12 @@ def execute_trade_with_cache(
     result = mt5.order_send(request)
     
     if result is None:
-        raise OrderExecutionError("No response from MT5")
+        logger.error("No response from MT5")
+        return False, None
     
     if result.retcode != mt5.TRADE_RETCODE_DONE:
-        raise OrderExecutionError(f"Order failed: {result.comment} (retcode: {result.retcode})")
+        logger.error(f"Order failed: {result.comment} (retcode: {result.retcode})")
+        return False, None
     
     logger.info(f"Trade executed: {direction} at {result.price:.5f}, ticket: {result.order}")
 
