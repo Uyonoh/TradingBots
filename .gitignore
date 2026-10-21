@@ -24,6 +24,7 @@ makedb.py
 # Config
 *.config
 *.json
+!live/config/*.json
 
 # Logging and data
 /dax_ticks

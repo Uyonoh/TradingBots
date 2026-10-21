@@ -1,0 +1,46 @@
+{
+  "bias_filter": {
+    "buy_threshold": 0.5593982605738395,
+    "sell_threshold": 0.49108685855107465
+  },
+  "entry_conditions": {
+    "buffer_pips": 19,
+    "velocity_multiplier": 1.9486235513749763,
+    "lookback_seconds": 3600,
+    "price_change_threshold": 35,
+    "tick_loockback": 420
+  },
+  "risk_management": {
+    "initial_sl_pips": 100,
+    "trailing_stages": [
+      { "min_profit": 0, "max_profit": 35, "retention": -1 },
+      { "min_profit": 35, "max_profit": 70, "retention": 0.76 },
+      { "min_profit": 70, "max_profit": 105, "retention": 0.83 },
+      { "min_profit": 105, "max_profit": 140, "retention": 0.9 },
+      { "min_profit": 140, "max_profit": 175, "retention": 0.95 },
+      { "min_profit": 175, "max_profit": 210, "retention": 0.95 },
+      { "min_profit": 210, "max_profit": 245, "retention": 0.95 },
+      { "min_profit": 245, "max_profit": 280, "retention": 0.95 },
+      { "min_profit": 280, "max_profit": 315, "retention": 0.95 },
+      { "min_profit": 315, "retention": 0.95 }
+    ]
+  },
+  "session": {
+    "pre-trading": 1,
+    "day_open": "07:30",
+    "trading_start": "07:53",
+    "trading_end": "13:53",
+    "ghost_start": "05:31",
+    "ghost_end": "05:43"
+  },
+  "logging": {
+    "level": "INFO",
+    "enable_file_logging": true
+  },
+  "performance": {
+    "tick_processing_interval": 0.1,
+    "velocity_update_interval": 1.0,
+    "position_check_interval": 2.0,
+    "outside_session_sleep": 60.0
+  }
+}

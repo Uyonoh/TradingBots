@@ -1,4 +1,5 @@
 import argparse
+import json
 import pandas as pd
 import numpy as np
 import pytz
@@ -530,157 +531,64 @@ DEVIATION = 10
 MAGIC_NUM += "01"
 MAGIC_NUM = int(MAGIC_NUM)
 
-# Configuration
-CONFIG = {
-    'bias_filter': {
-        'buy_threshold': 0.6, 
-        'sell_threshold': 0.4
-    }, 
-    'entry_conditions': {
-        'buffer_pips': 20, 
-        'velocity_multiplier': 2, 
-        'lookback_seconds': 60*60
-    }, 
-    'risk_management': {
-        'initial_sl_pips': 50, 
-        'trailing_stages': [
-            {'min_profit': 0,   'max_profit': 30,  'retention': -1}, 
-            {'min_profit': 30,  'max_profit': 60,  'retention': 0.5}, 
-            {'min_profit': 60,  'max_profit': 90,  'retention': 0.7}, 
-            {'min_profit': 90,  'max_profit': 120, 'retention': 0.8}, 
-            {'min_profit': 120, 'max_profit': 150, 'retention': 0.9}, 
-            {'min_profit': 150, 'retention': 0.95}
-        ]
-    },
-    'session': {
-        'pre-trading': 1, # Hours
-        'day_open': '9:00',
-        'trading_start': '10:00',
-        'trading_end': '17:00',
-        'ghost_start': '8:00',
-        'ghost_end': '8:30'
-    },
-    'logging': {
-        'level': 'INFO',
-        'enable_file_logging': True
-    },
-    'performance': {
-        'tick_processing_interval': 0.1,  # seconds
-        'velocity_update_interval': 1.0,  # seconds
-        'position_check_interval': 2.0,   # seconds
-        'outside_session_sleep': 60.0     # seconds when outside trading hours
-    }
-}
+# Configuration loaded per-symbol from the config directory
+CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
 
-CONFIG = {
-    "bias_filter": {"buy_threshold": 0.6589, "sell_threshold": 0.3173},
-    "entry_conditions": {
-        "buffer_pips": 5,
-        "velocity_multiplier": 1.9501,
-        "lookback_seconds": 60*60,
-        "price_change_threshold": 5,
-        "tick_loockback": 490,
-    },
-    "risk_management": {
-        "initial_sl_pips": 60,
-        "trailing_stages": [
-            {"min_profit": 0, "max_profit": np.int64(27), "retention": -1},
-            {"min_profit": np.int64(27), "max_profit": np.int64(54), "retention": 0.48},
-            {"min_profit": np.int64(54), "max_profit": np.int64(81), "retention": 0.53},
-            {"min_profit": np.int64(81), "max_profit": np.int64(108), "retention": 0.59},
-            {"min_profit": np.int64(108), "max_profit": np.int64(135), "retention": 0.64},
-            {"min_profit": np.int64(135), "max_profit": np.int64(162), "retention": 0.69,},
-            {"min_profit": np.int64(162), "retention": 0.95},
-        ],
-    },
-    'session': {
-        'pre-trading': 1, # Hours
-        'day_open': '08:30',
-        'trading_start': '08:33',
-        'trading_end': '20:03',
-        'ghost_start': '06:09',
-        'ghost_end': '06:12'
-    }}
+CONFIG: Dict[str, Any] = {}
 
 
+def _sanitize_symbol(symbol: str) -> str:
+    """Convert a broker symbol into a safe config file stem."""
+    sanitized = symbol.strip().upper().lstrip("#")
+    for char in '<>:"/\\|?* ':
+        sanitized = sanitized.replace(char, "_")
+    return sanitized
 
 
+def _find_config_file(symbol: str, config_dir: str = CONFIG_DIR) -> Optional[str]:
+    """Find the config file for a symbol, matching case-insensitively."""
+    candidates = {symbol.strip().upper(), _sanitize_symbol(symbol)}
+
+    for filename in os.listdir(config_dir):
+        stem, ext = os.path.splitext(filename)
+        if ext.lower() != ".json":
+            continue
+        if stem.strip().upper() in candidates:
+            return os.path.join(config_dir, filename)
+
+    return None
 
 
-CONFIG = {'bias_filter': {'enabled': True,
-                            'buy_threshold': 0.659134602702738,
-                            'sell_threshold': 0.3598001013743884},
-           'entry_conditions': {'buffer_pips': 17,
-                                  'velocity_multiplier': 2.0440046667408294,
-                                  'lookback_seconds': '3600S',
-                                  'price_change_threshold': 50,
-                                  'tick_loockback': 260},
-           'risk_management': {'initial_sl_pips': [100, 100],
-                                 'trailing_stages': [{'min_profit': 0, 'max_profit': 36, 'retention': -1},
-                                                        {'min_profit': 36, 'max_profit': 72, 'retention': 0.7},
-                                                        {'min_profit': 72, 'retention': 0.95}]},
-           'session_constraints': {'day_open': '08:30',
-                                     'entry_start': '08:47',
-                                     'mandatory_close': '19:47',
-                                     'ghost_open': '06:15',
-                                     'ghost_close': '06:48'}}
+def load_config(symbol: str, config_dir: str = CONFIG_DIR) -> Tuple[Dict[str, Any], str]:
+    """Load the per-symbol configuration from the config directory."""
+    symbol = symbol.strip().upper()
 
-CONFIG = {'bias_filter': {'enabled': True, 'buy_threshold': 0.5455151418406098, 'sell_threshold': 0.4926398931530179}, 'entry_conditions': {'buffer_pips': 14, 'velocity_multiplier': 1.972820694959165, 'lookback_seconds': '3600S', 'price_change_threshold': 15, 'tick_loockback': 420}, 'risk_management': {'initial_sl_pips': [100, 100], 'trailing_stages': [{'min_profit': 0, 'max_profit': 37, 'retention': -1}, {'min_profit': 37, 'max_profit': 74, 'retention': 0.74}, {'min_profit': 74, 'max_profit': 111, 'retention': 0.81}, {'min_profit': 111, 'max_profit': 148, 'retention': 0.88}, {'min_profit': 148, 'max_profit': 185, 'retention': 0.95}, {'min_profit': 185, 'max_profit': 222, 'retention': 0.95}, {'min_profit': 222, 'max_profit': 259, 'retention': 0.95}, {'min_profit': 259, 'max_profit': 296, 'retention': 0.95}, {'min_profit': 296, 'retention': 0.95}]}, 'session_constraints': {'day_open': '07:30', 'entry_start': '07:44', 'mandatory_close': '13:44', 'ghost_open': '05:27', 'ghost_close': '05:40'}}
+    if not os.path.isdir(config_dir):
+        raise ConfigurationError(f"Config directory not found: {config_dir}")
 
-CONFIG = {'bias_filter': {'enabled': True,
-                            'buy_threshold': 0.5593982605738395,
-                            'sell_threshold': 0.49108685855107465},
-           'entry_conditions': {'buffer_pips': 19,
-                                  'velocity_multiplier': 1.9486235513749763,
-                                  'lookback_seconds': '3600S',
-                                  'price_change_threshold': 35,
-                                  'tick_loockback': 420},
-           'risk_management': {'initial_sl_pips': [100, 100],
-                                 'trailing_stages': [{'min_profit': 0, 'max_profit': 35, 'retention': -1},
-                                                        {'min_profit': 35, 'max_profit': 70, 'retention': 0.76},
-                                                        {'min_profit': 70, 'max_profit': 105, 'retention': 0.83},
-                                                        {'min_profit': 105, 'max_profit': 140, 'retention': 0.9},
-                                                        {'min_profit': 140, 'max_profit': 175, 'retention': 0.95},
-                                                        {'min_profit': 175, 'max_profit': 210, 'retention': 0.95},
-                                                        {'min_profit': 210, 'max_profit': 245, 'retention': 0.95},
-                                                        {'min_profit': 245, 'max_profit': 280, 'retention': 0.95},
-                                                        {'min_profit': 280, 'max_profit': 315, 'retention': 0.95},
-                                                        {'min_profit': 315, 'retention': 0.95}]},
-           'session_constraints': {'day_open': '07:30',
-                                     'entry_start': '07:53',
-                                     'mandatory_close': '13:53',
-                                     'ghost_open': '05:31',
-                                     'ghost_close': '05:43'}}
+    config_file = _find_config_file(symbol, config_dir)
+    if config_file is None:
+        expected = os.path.join(config_dir, f"{_sanitize_symbol(symbol)}.json")
+        available = sorted(
+            os.path.splitext(f)[0] for f in os.listdir(config_dir) if f.lower().endswith(".json")
+        )
+        raise ConfigurationError(
+            f"No configuration found for symbol '{symbol}'. Expected {expected}. "
+            f"Available configs: {', '.join(available) or 'none'}"
+        )
 
-CONFIG['session'] = {}
-CONFIG['session']['pre-trading'] =   1
-CONFIG['session']['day_open'] =      CONFIG['session_constraints']['day_open']
-CONFIG['session']['trading_start'] = CONFIG['session_constraints']['entry_start']
-CONFIG['session']['trading_end'] =   CONFIG['session_constraints']['mandatory_close']
-CONFIG['session']['ghost_start'] =   CONFIG['session_constraints']['ghost_open']
-CONFIG['session']['ghost_end'] =     CONFIG['session_constraints']['ghost_close']
-CONFIG['risk_management']['initial_sl_pips'] = CONFIG['risk_management']['initial_sl_pips'][0]
-CONFIG['entry_conditions']['lookback_seconds'] =    60 * 60
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ConfigurationError(f"Error parsing JSON config file {config_file}: {e}")
+    except OSError as e:
+        raise ConfigurationError(f"Error reading config file {config_file}: {e}")
 
+    if not isinstance(config, dict):
+        raise ConfigurationError(f"Config file must contain a JSON object: {config_file}")
 
-#CONFIG['session']['day_open'] =      '4:00'
-#CONFIG['session']['trading_start'] = '4:00'
-#CONFIG['session']['trading_end'] =   '22:00'
-#CONFIG['session']['ghost_start'] =   '3:30'
-#CONFIG['session']['ghost_end'] =     '4:00'
-
-CONFIG['logging'] =  {
-        'level': 'INFO',
-        'enable_file_logging': True
-    }
-
-CONFIG['performance'] = {
-        'tick_processing_interval': 0.1,  # seconds
-        'velocity_update_interval': 1.0,  # seconds
-        'position_check_interval': 2.0,   # seconds
-        'outside_session_sleep': 60.0     # seconds when outside trading hours
-    }
-
+    return config, config_file
 
 # Global instances
 logger = None
@@ -787,6 +695,7 @@ class OptimizedVelocityMonitor:
         # Extract timestamps efficiently using numpy
         # All timestamps are after servertime, return all
         timestamps = ticks['time_msc'] / 1000.0
+        # All timestamps are after server time,return them
         return timestamps
     
     def get_ticks_range(self, server_time=None):
@@ -1425,7 +1334,7 @@ def safe_mt5_call(func: Callable, *args, **kwargs) -> Any:
 # OPTIMIZED MAIN LOOP
 # -------------------------------------------------------------------
 def main():
-    global logger, connection_manager
+    global logger, connection_manager, CONFIG
     
     parser = argparse.ArgumentParser(description="Optimized live trading bot")
     parser.add_argument("symbol", help="symbol to be traded")
@@ -1443,6 +1352,14 @@ def main():
     logger = trading_logger.setup_logging(symbol, args.log_level)
     logger.info(f"Starting optimized trading bot for {symbol}")
     
+    # Load per-symbol configuration
+    try:
+        CONFIG, config_file = load_config(symbol)
+    except ConfigurationError as e:
+        logger.error(str(e))
+        sys.exit(1)
+    logger.info(f"Loaded configuration from {config_file}")
+
     # Validate configuration
     config_errors = ConfigValidator.validate_config(CONFIG)
     if config_errors:
