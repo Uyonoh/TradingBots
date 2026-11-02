@@ -1,33 +1,72 @@
 {
   "bias_filter": {
-    "buy_threshold": 0.6,
-    "sell_threshold": 0.4
+    "buy_threshold": 0.5119377499022145,
+    "sell_threshold": 0.354732714217314,
+    "enabled": true
   },
   "entry_conditions": {
-    "buffer_pips": 20,
-    "velocity_multiplier": 2,
+    "buffer_pips": 45,
+    "velocity_multiplier": 3.0721647837640544,
     "lookback_seconds": 3600,
-    "price_change_threshold": 500,
-    "tick_loockback": 50
+    "price_change_threshold": 5,
+    "tick_loockback": 670
   },
   "risk_management": {
-    "initial_sl_pips": 50,
+    "initial_sl_pips": 185,
     "trailing_stages": [
-      { "min_profit": 0, "max_profit": 30, "retention": -1 },
-      { "min_profit": 30, "max_profit": 60, "retention": 0.5 },
-      { "min_profit": 60, "max_profit": 90, "retention": 0.7 },
-      { "min_profit": 90, "max_profit": 120, "retention": 0.8 },
-      { "min_profit": 120, "max_profit": 150, "retention": 0.9 },
-      { "min_profit": 150, "retention": 0.95 }
+      {
+        "min_profit": 0,
+        "max_profit": 86,
+        "retention": -1
+      },
+      {
+        "min_profit": 86,
+        "max_profit": 172,
+        "retention": 0.57
+      },
+      {
+        "min_profit": 172,
+        "max_profit": 258,
+        "retention": 0.67
+      },
+      {
+        "min_profit": 258,
+        "max_profit": 344,
+        "retention": 0.77
+      },
+      {
+        "min_profit": 344,
+        "max_profit": 430,
+        "retention": 0.87
+      },
+      {
+        "min_profit": 430,
+        "max_profit": 516,
+        "retention": 0.95
+      },
+      {
+        "min_profit": 516,
+        "max_profit": 602,
+        "retention": 0.95
+      },
+      {
+        "min_profit": 602,
+        "max_profit": 688,
+        "retention": 0.95
+      },
+      {
+        "min_profit": 688,
+        "retention": 0.95
+      }
     ]
   },
   "session": {
     "pre-trading": 1,
-    "day_open": "09:00",
-    "trading_start": "10:00",
-    "trading_end": "23:00",
-    "ghost_start": "08:00",
-    "ghost_end": "08:30"
+    "day_open": "00:30",
+    "trading_start": "01:22",
+    "trading_end": "22:52",
+    "ghost_start": "00:04",
+    "ghost_end": "00:35"
   },
   "logging": {
     "level": "INFO",
