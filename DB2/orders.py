@@ -3,6 +3,7 @@ import sys
 import math
 import argparse
 import sqlite3
+import time
 # import pandas as pd
 from dotenv import load_dotenv
 from utils import retry
@@ -30,6 +31,23 @@ PASSWORD = os.environ["PASSWORD"]
 SERVER = os.environ["SERVER"]
 MAGIC_NUM += "00"
 MAGIC_NUM = int(MAGIC_NUM)
+
+
+def get_tick(symbol, retries=5, delay=0.1):
+    """Safely fetch the latest tick for ``symbol``.
+
+    ``mt5.symbol_info_tick`` returns ``None`` whenever no fresh tick data is
+    available (market closed, symbol missing from Market Watch, terminal
+    warm-up, transient connection loss, ...). Accessing ``.ask``/``.bid`` on
+    that ``None`` raises ``'NoneType' object has no attribute 'ask'``. Retry
+    briefly and return ``None`` if the tick is still unavailable.
+    """
+    for _ in range(max(1, retries)):
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is not None:
+            return tick
+        time.sleep(delay)
+    return None
 
 # mt5.initialize()
 # positions = mt5.positions_get()
@@ -80,7 +98,11 @@ def order(order_type, start_price, spacing_pips, num_orders, volume_per_order, s
     # 2. Prepare order request template[citation:1][citation:2]
     logger.info("Preparing request...")
 
-    contract_size = mt5.symbol_info(symbol).trade_contract_size
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        logger.error(f"Symbol info unavailable for {symbol}; cannot place order.")
+        return
+    contract_size = symbol_info.trade_contract_size
 
     valid_order = ALLOWED_ORDERS.get(order_type.lower(), None)
     if valid_order is None:
@@ -356,6 +378,9 @@ def make_doublebanger_orders(bot, inputs, direction, magic=MAGIC_NUM, comment=No
 
     # MT5
     symbol_info = mt5.symbol_info(bot.symbol)
+    if symbol_info is None:
+        logger.error(f"Symbol info unavailable for {bot.symbol}; cannot place doublebanger orders.")
+        return
 
     # Only need to track this, for following orders
     opp_direction = "sell" if direction == "buy" else "buy"
@@ -480,7 +505,10 @@ def doublebanger_orders(bot, inputs, direction, comment=None, autocomplete=False
         # initial_entry = initial_entry - (spacing_pips * bot.pip_value * dir_multiplier)
         while pending:
             if input(f'Enter "{opp_direction.upper()}" to place remaining sell stops: ') == opp_direction.upper():
-                symbol_ticks = mt5.symbol_info_tick(bot.symbol)
+                symbol_ticks = get_tick(bot.symbol)
+                if symbol_ticks is None:
+                    bot.logger.error(f"Failed to retrieve tick for {bot.symbol}: {mt5.last_error()}")
+                    continue
                 # Using initial directional bias
                 if opp_direction == "sell": # initial = buy
                     if symbol_ticks.ask < initial_entry:
@@ -522,7 +550,10 @@ def doublebanger_orders(bot, inputs, direction, comment=None, autocomplete=False
         return positions
 
 def doublebanger(bot, inputs, magic=MAGIC_NUM, comment=None, confirm=True, autocomplete=False):
-    symbol_ticks = bot.get_symbol_ticks()
+    symbol_ticks = get_tick(bot.symbol)
+    if symbol_ticks is None:
+        bot.logger.error(f"Failed to retrieve tick for {bot.symbol}; cannot place doublebanger orders.")
+        return
     spread = symbol_ticks.ask - symbol_ticks.bid
     inputs["spread"] = spread
     bot.logger.info("Current spread is %s", spread)
@@ -549,7 +580,10 @@ def doublebanger(bot, inputs, magic=MAGIC_NUM, comment=None, confirm=True, autoc
 
 
 def doublebanger1(bot, inputs, confirm=True, autocomplete=False):
-    symbol_ticks = bot.get_symbol_ticks()
+    symbol_ticks = get_tick(bot.symbol)
+    if symbol_ticks is None:
+        bot.logger.error(f"Failed to retrieve tick for {bot.symbol}; cannot place doublebanger1 orders.")
+        return
     spread = symbol_ticks.ask - symbol_ticks.bid
     bot.logger.info("Current spread is %s", spread)
 
@@ -586,7 +620,10 @@ def doublebanger1(bot, inputs, confirm=True, autocomplete=False):
             inputs["entry"] -= 10 * bot.pip_value
             while pending:
                 if input('Enter "SELL" to place remaining sell stops: ') == "SELL":
-                    symbol_ticks = mt5.symbol_info_tick(bot.symbol)
+                    symbol_ticks = get_tick(bot.symbol)
+                    if symbol_ticks is None:
+                        bot.logger.error(f"Failed to retrieve tick for {bot.symbol}: {mt5.last_error()}")
+                        continue
                     if symbol_ticks.ask < inputs["entry"]:
                         bot.logger.error("Market price still below %s", inputs["entry"])
                         continue

@@ -112,6 +112,25 @@ UTC2 = pytz.timezone("Europe/Athens")  # EET / CAT
 UTC3 = pytz.timezone("Asia/Baghdad")  # EAT / MST
 LOCAL_ZONE = datetime.now(UTC).astimezone().tzinfo.tzname
 
+
+def get_tick(symbol, retries=MAX_RETRIES, delay=0.1):
+    """Safely fetch the latest tick for ``symbol``.
+
+    ``mt5.symbol_info_tick`` returns ``None`` whenever no fresh tick data is
+    available (market closed, symbol missing from Market Watch, terminal
+    warm-up, transient connection loss, ...). Accessing ``.ask``/``.bid`` on
+    that ``None`` is what produced ``'NoneType' object has no attribute
+    'ask'``. Retry briefly and return ``None`` if the tick is still
+    unavailable so callers can handle it gracefully.
+    """
+    for _ in range(max(1, retries)):
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is not None:
+            return tick
+        t_mod.sleep(delay)
+    return None
+
+
 class StrategyState:
     """Keeps track of daily state to survive loop cycles."""
 
@@ -170,10 +189,15 @@ class PositionManager:
 
         # Check symbol
         if not mt5.symbol_select(self.symbol, True):
-            self.logger.error(f"symbol {self.symbol} not found")
-            return
+            err = mt5.last_error()
+            self.logger.error(f"symbol {self.symbol} not found: {err}")
+            raise NameError(f"Symbol {self.symbol} is unavailable: {err}")
 
         self.symbol_info = mt5.symbol_info(self.symbol)
+        if self.symbol_info is None:
+            err = mt5.last_error()
+            self.logger.error(f"symbol {self.symbol} info unavailable: {err}")
+            raise NameError(f"Symbol info for {self.symbol} is unavailable: {err}")
         self.contract_size = self.symbol_info.trade_contract_size
 
         self.logger.info(f"Postion Manager Started on {self.symbol}...")
@@ -194,7 +218,10 @@ class PositionManager:
 
     @retry(max_attempts=3, delay=0.1)
     def close_position(self, position):
-        tick = mt5.symbol_info_tick(self.symbol)
+        tick = get_tick(self.symbol)
+        if tick is None:
+            self.logger.error(f"Failed to retrieve tick for {self.symbol}: {mt5.last_error()}")
+            return
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": self.symbol,
@@ -272,15 +299,17 @@ class PositionManager:
                 if "No changes" in result.comment:
                     return True
 
-                tick = mt5.symbol_info_tick(self.symbol)
-                self.last_ask = tick.ask
-                self.last_bid = tick.bid
+                tick = get_tick(self.symbol)
+                if tick is not None:
+                    self.last_ask = tick.ask
+                    self.last_bid = tick.bid
                 self.logger.info(f"SL/TP modification Failed [{new_sl} / {new_tp}]: {result.comment}")
                 if "Invalid stops" in result.comment:
                     self.logger.info(f"\t Ask: {self.last_ask}, Bid: {self.last_bid} ")
-                    self.logger.info(f"\t Ask Diff: [{abs(new_sl - self.last_ask)}/{abs(new_tp - self.last_ask)}]")
-                    self.logger.info(f"\t Bid Diff: [{abs(new_sl - self.last_bid)}/{abs(new_tp - self.last_bid)}]")
-                    self.logger.info(f"Open Diff: [{abs(new_sl - position.price_open)}/{abs(new_tp - position.price_open)}]")
+                    if self.last_ask is not None and self.last_bid is not None:
+                        self.logger.info(f"\t Ask Diff: [{abs(new_sl - self.last_ask)}/{abs(new_tp - self.last_ask)}]")
+                        self.logger.info(f"\t Bid Diff: [{abs(new_sl - self.last_bid)}/{abs(new_tp - self.last_bid)}]")
+                        self.logger.info(f"Open Diff: [{abs(new_sl - position.price_open)}/{abs(new_tp - position.price_open)}]")
 
                 raise ValueError(f"SL/TP modification Failed [{new_sl} / {new_tp}]: {result.comment} Code: {result.retcode}")
                 return False
@@ -435,7 +464,8 @@ class PositionManager:
             # tick = mt5.symbol_info_tick(self.symbol)
             # spread = tick.ask - tick.bid
             if (buy_entry == 100**100) and (sell_entry == 0):
-                self.positions = [p for p in mt5.positions_get(symbol=self.symbol) if p.magic == self.magic_num]
+                open_positions = mt5.positions_get(symbol=self.symbol) or []
+                self.positions = [p for p in open_positions if p.magic == self.magic_num]
                 if not self.positions:
                     raise ValueError("Empty positions")
                 else:
@@ -456,8 +486,12 @@ class PositionManager:
             raise Exception(e)
 
     def shrink_trades(self):
-        spread = self.last_ask - self.last_bid
-        positions = [p for p in mt5.positions_get(symbol=self.symbol) if p.magic == self.magic_num]
+        if self.last_ask is not None and self.last_bid is not None:
+            spread = self.last_ask - self.last_bid
+        else:
+            spread = self.spread
+        open_positions = mt5.positions_get(symbol=self.symbol) or []
+        positions = [p for p in open_positions if p.magic == self.magic_num]
         for pos in positions:
             if pos.ticket == self.foreign_ticket or pos.ticket == self.alien_ticket:
                 continue
@@ -638,7 +672,7 @@ class PositionManager:
         lot_size = max(lot_size, 0.01)
         self.logger.info(f"ABS_SUM: {abs_profit_sum} | PriceDiff: {price_diff}")
         self.logger.info(f"Using lot size = {lot_size}")
-        tick = mt5.symbol_info_tick(self.symbol)
+        tick = get_tick(self.symbol) or self.symbol_info
 
         if buy_pnl > sell_pnl:
             opp_direction = "sell"
@@ -734,7 +768,7 @@ class PositionManager:
 
         """
         # positions = [p for p in mt5.positions_get(symbol=self.symbol) if p.magic == self.magic_num]
-        orders    = [o for o in mt5.orders_get(symbol=self.symbol) if o.magic == self.magic_num]
+        orders    = [o for o in (mt5.orders_get(symbol=self.symbol) or []) if o.magic == self.magic_num]
 
         buy_orders = [o for o in orders if o.type == mt5.ORDER_TYPE_BUY_STOP]
         sell_orders = [o for o in orders if o.type == mt5.ORDER_TYPE_SELL_STOP]
@@ -861,7 +895,7 @@ class PositionManager:
         # lot_size = max(lot_size, 0.01)
         # self.logger.info(f"ABS_SUM: {abs_profit_sum} | PriceDiff: {price_diff}")
         # self.logger.info(f"Using lot size = {lot_size}")
-        tick = mt5.symbol_info_tick(self.symbol)
+        tick = get_tick(self.symbol) or self.symbol_info
         spread = self.spread
 
         if buy_pnl > sell_pnl:
@@ -943,7 +977,7 @@ class PositionManager:
         #  Order is 0.1 + lots required to negate pnl
 
         # positions = [p for p in mt5.positions_get(symbol=self.symbol) if p.magic == self.magic_num]
-        orders    = [o for o in mt5.orders_get(symbol=self.symbol) if o.magic == self.magic_num]
+        orders    = [o for o in (mt5.orders_get(symbol=self.symbol) or []) if o.magic == self.magic_num]
 
         buy_orders = [o for o in orders if o.type == mt5.ORDER_TYPE_BUY_STOP]
         sell_orders = [o for o in orders if o.type == mt5.ORDER_TYPE_SELL_STOP]
@@ -1026,7 +1060,7 @@ class PositionManager:
     def monitor_orders(self):
         if not self.orders_deleted:
             # positions = [p for p in mt5.positions_get(symbol=self.symbol) if p.magic == self.magic_num]
-            orders    = [o for o in mt5.orders_get(symbol=self.symbol) if o.magic == self.magic_num]
+            orders    = [o for o in (mt5.orders_get(symbol=self.symbol) or []) if o.magic == self.magic_num]
 
             buy_orders = [o for o in orders if o.type == mt5.ORDER_TYPE_BUY_STOP]
             sell_orders = [o for o in orders if o.type == mt5.ORDER_TYPE_SELL_STOP]
@@ -1059,10 +1093,13 @@ class PositionManager:
             # 1. Hardware Efficiency: Sleep to reduce CPU usage
             t_mod.sleep(0.1)
             #self.monitor_orders()
-            tick = mt5.symbol_info_tick(self.symbol)
-            spread = tick.ask - tick.bid
-            self.last_ask = tick.ask
-            self.last_bid = tick.bid
+            tick = get_tick(self.symbol)
+            if tick is not None:
+                spread = tick.ask - tick.bid
+                self.last_ask = tick.ask
+                self.last_bid = tick.bid
+            else:
+                spread = self.spread
 
             # 2. Update Time
             now_cet = self.get_server_time_cet(self.symbol)
@@ -1124,6 +1161,11 @@ class PositionManager:
                 #     continue
 
                 # Trailing Stop Logic
+                if tick is None:
+                    self.logger.warning(
+                        f"No tick available for {self.symbol}; skipping trailing update for {pos.ticket}"
+                    )
+                    continue
                 current_profit_points = (
                     (tick.bid - pos.price_open)
                     if pos.type == mt5.ORDER_TYPE_BUY
@@ -1199,7 +1241,7 @@ class PositionManager:
                                 max_pips = pips
                                 pos1 = p
 
-                        min_diff = mt5.symbol_info(self.symbol).point
+                        min_diff = self.symbol_info.point if self.symbol_info else 0.0
                         new_sl = pos1.price_open + min_diff
                         new_sl = normalize_price(new_sl, self.symbol_info)
 
@@ -1217,7 +1259,12 @@ class PositionManager:
                             for i in range(MAX_RETRIES):
                                 if not success:
                                     step = 0#(2) ** i + i + 1
-                                    tick = mt5.symbol_info_tick(self.symbol)
+                                    tick = get_tick(self.symbol)
+                                    if tick is None:
+                                        self.logger.error(
+                                            f"Failed to retrieve tick for {self.symbol} during SL rollback: {mt5.last_error()}"
+                                        )
+                                        break
                                     price = (
                                         tick.bid
                                         if pos.type == mt5.ORDER_TYPE_BUY

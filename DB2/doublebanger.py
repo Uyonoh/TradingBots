@@ -40,6 +40,23 @@ MAGIC_NUM += "00"
 MAGIC_NUM = int(MAGIC_NUM)
 
 
+def get_tick(symbol, retries=5, delay=0.1):
+    """Safely fetch the latest tick for ``symbol``.
+
+    ``mt5.symbol_info_tick`` returns ``None`` whenever no fresh tick data is
+    available (market closed, symbol missing from Market Watch, terminal
+    warm-up, transient connection loss, ...). Accessing ``.ask``/``.bid`` on
+    that ``None`` raises ``'NoneType' object has no attribute 'ask'``. Retry
+    briefly and return ``None`` if the tick is still unavailable.
+    """
+    for _ in range(max(1, retries)):
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is not None:
+            return tick
+        time.sleep(delay)
+    return None
+
+
 def man():
     order(
         order_type="sell stop",
@@ -123,7 +140,7 @@ class TradingBot:
             raise ValueError(f"Symbol {symbol} did not return a contract size.")
 
     def get_symbol_ticks(self):
-        return mt5.symbol_info_tick(self.symbol)
+        return get_tick(self.symbol)
 
     def get_inputs(self, inputs: list[str] = None) -> dict[str]:
         if inputs is None:
@@ -308,8 +325,11 @@ class TradingBot:
 
         doubled_pos = [2, 5, 9]
 
-        symbol_ticks = self.get_symbol_ticks()
-        spread = symbol_ticks.ask - symbol_ticks.bid
+        symbol_ticks = self.get_symbol_ticks() or get_tick(self.symbol)
+        if symbol_ticks is not None:
+            spread = symbol_ticks.ask - symbol_ticks.bid
+        else:
+            spread = self.spread
         initial_entry = initial_entry - (spread * dir_multiplier)
 
         order_still_pending = True
@@ -422,7 +442,13 @@ class TradingBot:
         # min_dist = mt5.symbol_info(self.symbol).trade_stops_level
         # digits = mt5.symbol_info(self.symbol).digits
         # min_pips = (min_dist * (10 ** -digits)) + 2
-        tick = mt5.symbol_info_tick(self.symbol)
+        tick = get_tick(self.symbol)
+        if tick is None:
+            err = mt5.last_error()
+            self.logger.error(
+                f"Failed to retrieve tick for {self.symbol}: {err}. Cannot determine day open."
+            )
+            return
         day_open = round((tick.ask + tick.bid) / 2, 5)
         breadth = (
             max(args.breadth, self.symbol_info.spread * (10**-self.symbol_info.digits))
@@ -506,9 +532,12 @@ class TradingBot:
         tp_pips = inputs["tp pips"]
         orders = inputs["num_orders"]
         lot_size = inputs["lot_size"]
-        symbol_ticks = self.get_symbol_ticks()
+        symbol_ticks = self.get_symbol_ticks() or get_tick(self.symbol)
         spacing_pips = inputs["spacing_pips"]
-        spread = symbol_ticks.ask - symbol_ticks.bid
+        if symbol_ticks is not None:
+            spread = symbol_ticks.ask - symbol_ticks.bid
+        else:
+            spread = self.spread
 
         if not isinstance(spacing_pips, (int, float)):
             spacing_pips = 10  # tp_pips / orders
